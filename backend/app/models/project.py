@@ -16,6 +16,7 @@ class Novel(Base):
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     genre: Mapped[str] = mapped_column(String(50), default="玄幻修仙")
     idea: Mapped[str | None] = mapped_column(Text)
+    synopsis: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(
         Enum("draft", "writing", "completed"), default="draft"
     )
@@ -35,7 +36,16 @@ class Outline(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
     novel_id: Mapped[str] = mapped_column(String(36), ForeignKey("novels.id", ondelete="CASCADE"))
+    
+    # 结构化大纲字段
+    title: Mapped[str | None] = mapped_column(String(200))
+    synopsis: Mapped[str | None] = mapped_column(Text)
+    selling_points: Mapped[str | None] = mapped_column(Text)
+    main_plot: Mapped[str | None] = mapped_column(Text(length=4294967295)) # 极简主线大纲
+    
+    # 兼容旧字段，后续可逐步废弃
     content: Mapped[str | None] = mapped_column(Text(length=4294967295))  # LONGTEXT
+    
     ai_generated: Mapped[bool] = mapped_column(Boolean, default=True)
     confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
     version: Mapped[int] = mapped_column(Integer, default=1)

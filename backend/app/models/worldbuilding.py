@@ -16,13 +16,11 @@ class Worldbuilding(Base):
     novel_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("novels.id", ondelete="CASCADE"), unique=True
     )
-    realm_system: Mapped[dict | None] = mapped_column(JSON)
-    currency: Mapped[dict | None] = mapped_column(JSON)
-    artifacts: Mapped[list | None] = mapped_column(JSON, default=list)
-    techniques: Mapped[list | None] = mapped_column(JSON, default=list)
-    factions: Mapped[list | None] = mapped_column(JSON, default=list)
-    geography: Mapped[list | None] = mapped_column(JSON, default=list)
-    custom_rules: Mapped[list | None] = mapped_column(JSON, default=list)
+    power_system: Mapped[list | None] = mapped_column(JSON, default=list) # 力量/境界体系
+    factions: Mapped[list | None] = mapped_column(JSON, default=list) # 势力/组织
+    geography: Mapped[list | None] = mapped_column(JSON, default=list) # 地理/地点
+    core_rules: Mapped[list | None] = mapped_column(JSON, default=list) # 核心法则/世界规则
+    items: Mapped[list | None] = mapped_column(JSON, default=list) # 关键物品/资源
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )

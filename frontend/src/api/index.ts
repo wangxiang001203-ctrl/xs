@@ -62,6 +62,16 @@ export const api = {
         novel_id: novelId,
         characters_in_synopsis: names,
       }).then(r => r.data),
+    generateTitles: (novelId: string, extraInstruction?: string) =>
+      http.post<{ titles: string[] }>('/api/ai/generate/titles', {
+        novel_id: novelId,
+        extra_instruction: extraInstruction,
+      }).then(r => r.data),
+    generateBookSynopsis: (novelId: string, extraInstruction?: string) =>
+      http.post<{ synopsis: string }>('/api/ai/generate/book-synopsis', {
+        novel_id: novelId,
+        extra_instruction: extraInstruction,
+      }).then(r => r.data),
   },
 
   volumes: {
@@ -74,6 +84,13 @@ export const api = {
       http.delete(`/api/projects/${novelId}/volumes/${volumeId}`).then(r => r.data),
     assignChapter: (novelId: string, volumeId: string, chapterId: string) =>
       http.post(`/api/projects/${novelId}/volumes/${volumeId}/assign-chapter/${chapterId}`).then(r => r.data),
+  },
+
+  admin: {
+    getWorkflowConfig: () =>
+      http.get<{ flow: Array<{ id: string; name: string; next: string }>; prompts: Record<string, string> }>('/api/admin/workflow-config').then(r => r.data),
+    updateWorkflowConfig: (data: { flow: Array<{ id: string; name: string; next: string }>; prompts: Record<string, string> }) =>
+      http.put<{ flow: Array<{ id: string; name: string; next: string }>; prompts: Record<string, string> }>('/api/admin/workflow-config', data).then(r => r.data),
   },
 }
 

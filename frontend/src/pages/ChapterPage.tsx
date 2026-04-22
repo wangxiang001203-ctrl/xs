@@ -77,24 +77,31 @@ export default function ChapterPage() {
     }
   }
 
-  function generateSynopsis() {
+  async function generateSynopsis() {
     if (!currentNovel || !currentChapter) return
     setGenerating(true)
-    setStreamText('')
-    abortRef.current = streamRequest(
-      '/api/ai/generate/synopsis',
-      {
-        novel_id: currentNovel.id,
-        chapter_id: currentChapter.id,
-        chapter_number: currentChapter.chapter_number,
-      },
-      chunk => setStreamText(prev => prev + chunk),
-      () => {
-        setGenerating(false)
-        message.success('细纲生成完成，请检查并保存')
-      },
-      err => { setGenerating(false); message.error(`生成失败：${err}`) },
-    )
+    setStreamText('正在生成细纲并解析为结构化数据，请稍候...')
+    try {
+      const res = await fetch('/api/ai/generate/synopsis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          novel_id: currentNovel.id,
+          chapter_id: currentChapter.id,
+          chapter_number: currentChapter.chapter_number,
+        })
+      })
+      if (!res.ok) throw new Error(await res.text())
+      
+      message.success('细纲生成并保存成功，请检查内容')
+      await loadData() // reload to get new synopsis data
+      validateChars()
+    } catch (e: any) {
+      message.error(`生成失败: ${e.message}`)
+    } finally {
+      setGenerating(false)
+      setStreamText('')
+    }
   }
 
   function generateSegment(segment: 'opening' | 'middle' | 'ending') {
@@ -148,6 +155,25 @@ export default function ChapterPage() {
 
   const charOptions = characters.map(c => ({ value: c.name, label: `${c.name}（${c.realm || '—'}）` }))
 
+  async function quickCreateMissingCharacters() {
+    if (!currentNovel || !validation || validation.valid) return
+    try {
+      for (const name of validation.missing) {
+        await api.characters.create(currentNovel.id, {
+          name,
+          role: '配角',
+          background: '在细纲中首次出现',
+          personality: '待补充',
+        })
+      }
+      message.success('缺失角色快速创建成功！')
+      await loadData()
+      validateChars()
+    } catch (e: any) {
+      message.error(`创建失败: ${e.message}`)
+    }
+  }
+
   const synopsisTab = (
     <div className={styles.synopsisForm}>
       {/* AI生成细纲 */}
@@ -173,6 +199,12 @@ export default function ChapterPage() {
           icon={<WarningOutlined />}
           message={`未定义角色：${validation.missing.join('、')}，请先在角色库中创建`}
           showIcon
+          action={
+            <Button size="small" type="primary" onClick={quickCreateMissingCharacters}>
+              快速创建缺失角色
+            </Button>
+          }
+          style={{ marginBottom: 16 }}
         />
       )}
 
@@ -288,7 +320,7 @@ export default function ChapterPage() {
       <div className={styles.contentHeader}>
         <span className={styles.wordCount}>
           {content.length} 字
-          {currentChapter.word_count_target && ` / 目标 ${synopsis?.word_count_target || 3000} 字`}
+          {synopsis?.word_count_target && ` / 目标 ${synopsis.word_count_target} 字`}
         </span>
         <div className={styles.contentActions}>
           {generating && <Spin size="small" />}

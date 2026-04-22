@@ -11,7 +11,7 @@ interface AppState {
   setCurrentChapter: (chapter: Chapter | null) => void
 
   // 当前视图
-  currentView: 'outline' | 'characters' | 'worldbuilding' | 'chapter' | 'synopsis'
+  currentView: 'outline' | 'characters' | 'worldbuilding' | 'chapter' | 'synopsis' | 'admin'
   setCurrentView: (view: AppState['currentView']) => void
 
   // 角色列表缓存（用于细纲校验）

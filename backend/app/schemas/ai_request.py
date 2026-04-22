@@ -1,11 +1,28 @@
 from pydantic import BaseModel
-from typing import Optional
-
+from typing import Optional, List
 
 class GenerateOutlineRequest(BaseModel):
     novel_id: str
     idea: str
+
+class GenerateWorldbuildingRequest(BaseModel):
+    novel_id: str
+    outline_id: Optional[str] = None # 如果不传，默认使用最新大纲
+
+class GenerateCharactersFromOutlineRequest(BaseModel):
+    novel_id: str
+    outline_id: Optional[str] = None # 如果不传，默认使用最新大纲
     genre: str = "玄幻修仙"
+
+
+class GenerateTitlesRequest(BaseModel):
+    novel_id: str
+    extra_instruction: Optional[str] = None
+
+
+class GenerateBookSynopsisRequest(BaseModel):
+    novel_id: str
+    extra_instruction: Optional[str] = None
 
 
 class GenerateSynopsisRequest(BaseModel):

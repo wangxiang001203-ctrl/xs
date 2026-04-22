@@ -4,6 +4,7 @@ import {
   BookOutlined, UserOutlined, GlobalOutlined,
   PlusOutlined, UnorderedListOutlined, FileTextOutlined,
   FolderOutlined, ThunderboltOutlined, DownOutlined, RightOutlined,
+  SettingOutlined,
 } from '@ant-design/icons'
 import { api, streamVolumeSynopsis } from '../../api'
 import { useAppStore } from '../../store'
@@ -120,21 +121,28 @@ export default function LeftNav() {
     }
   }
 
-  function generateVolumeSynopsis(volume: Volume) {
+  async function generateVolumeSynopsis(volume: Volume) {
     if (!currentNovel) return
     setGeneratingVolume(volume.id)
-    streamVolumeSynopsis(
-      currentNovel.id, volume.id, undefined,
-      () => {},
-      async () => {
-        setGeneratingVolume(null)
-        message.success(`《${volume.title}》细纲生成完成`)
-        // 刷新卷状态
-        const vols = await api.volumes.list(currentNovel.id)
-        setVolumes(vols)
-      },
-      err => { setGeneratingVolume(null); message.error(`生成失败：${err}`) },
-    )
+    try {
+      const res = await fetch('/api/ai/generate/volume-synopsis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ novel_id: currentNovel.id, volume_id: volume.id })
+      })
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.detail || '生成失败')
+      }
+      message.success(`《${volume.title}》细纲生成完成`)
+      // 刷新卷状态
+      const vols = await api.volumes.list(currentNovel.id)
+      setVolumes(vols)
+    } catch (err: any) {
+      message.error(`生成失败：${err.message}`)
+    } finally {
+      setGeneratingVolume(null)
+    }
   }
 
   function toggleVolume(volumeId: string) {
@@ -176,6 +184,15 @@ export default function LeftNav() {
             <span className={styles.novelTitle}>{n.title}</span>
           </div>
         ))}
+      </div>
+
+      <div className={styles.adminEntry}>
+        <NavItem
+          icon={<SettingOutlined />}
+          label="后台流程配置"
+          active={currentView === 'admin'}
+          onClick={() => { setCurrentView('admin'); setCurrentChapter(null) }}
+        />
       </div>
 
       {/* 当前小说导航 */}

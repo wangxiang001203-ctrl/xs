@@ -67,20 +67,29 @@ export default function CharactersPage() {
   function generateCharacters() {
     if (!currentNovel) return
     setGenerating(true)
-    setStreamText('')
-    streamGenerateCharacters(
-      currentNovel.id,
-      chunk => setStreamText(prev => prev + chunk),
-      async () => {
-        setGenerating(false)
-        setStreamText('')
-        message.success('角色生成完成，已自动写入角色库')
+    setStreamText('AI 正在从大纲提取核心角色，请稍候...')
+    
+    fetch('/api/ai/generate/characters', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ novel_id: currentNovel.id })
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error('生成失败或请先生成大纲')
+        const newChars = await res.json()
+        
         // 刷新角色列表
         const chars = await api.characters.list(currentNovel.id)
         setCharacters(chars)
-      },
-      err => { setGenerating(false); message.error(`生成失败：${err}`) },
-    )
+        message.success(`成功生成 ${newChars.length} 个核心角色`)
+      })
+      .catch(err => {
+        message.error(err.message)
+      })
+      .finally(() => {
+        setGenerating(false)
+        setStreamText('')
+      })
   }
 
   if (!currentNovel) return <div className={styles.empty}>请先选择小说</div>
@@ -135,11 +144,11 @@ export default function CharactersPage() {
             <Form.Item name="name" label="姓名" rules={[{ required: true }]} style={{ flex: 1 }}>
               <Input />
             </Form.Item>
+            <Form.Item name="role" label="角色类型" style={{ flex: 1 }}>
+              <Select options={[{ value: '主角', label: '主角' }, { value: '女主', label: '女主' }, { value: '反派', label: '反派' }, { value: '配角', label: '配角' }]} />
+            </Form.Item>
             <Form.Item name="gender" label="性别" style={{ width: 80 }}>
               <Select options={[{ value: '男' }, { value: '女' }, { value: '未知' }]} />
-            </Form.Item>
-            <Form.Item name="age" label="年龄" style={{ width: 80 }}>
-              <InputNumber min={0} style={{ width: '100%' }} />
             </Form.Item>
           </div>
           <div className={styles.formRow}>
@@ -149,14 +158,6 @@ export default function CharactersPage() {
             <Form.Item name="realm" label="境界" style={{ flex: 1 }}>
               <Input placeholder="如：筑基期" />
             </Form.Item>
-            <Form.Item name="realm_level" label="境界等级" initialValue={0} style={{ width: 90 }}>
-              <InputNumber min={0} style={{ width: '100%' }} />
-            </Form.Item>
-          </div>
-          <div className={styles.formRow}>
-            <Form.Item name="faction" label="阵营/门派" style={{ flex: 1 }}>
-              <Input />
-            </Form.Item>
             <Form.Item name="status" label="状态" initialValue="alive" style={{ width: 100 }}>
               <Select options={[
                 { value: 'alive', label: '存活' },
@@ -165,8 +166,14 @@ export default function CharactersPage() {
               ]} />
             </Form.Item>
           </div>
-          <Form.Item name="techniques" label="功法（每行一个）">
-            <Input.TextArea rows={2} placeholder="御剑术&#10;太清神雷" />
+          <Form.Item name="faction" label="阵营/门派" style={{ flex: 1 }}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="golden_finger" label="金手指/特殊能力">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+          <Form.Item name="motivation" label="核心动机/执念">
+            <Input.TextArea rows={2} />
           </Form.Item>
           <Form.Item name="appearance" label="外貌">
             <Input.TextArea rows={2} />
@@ -210,7 +217,19 @@ function CharCard({ char, onEdit, onDelete }: {
         <span>{char.race || '人族'}</span>
         {char.realm && <><span>·</span><span className={styles.realm}>{char.realm}</span></>}
       </div>
+      <div className={styles.roleTag}>{char.role || '配角'}</div>
       {char.faction && <div className={styles.faction}>{char.faction}</div>}
+      
+      {char.golden_finger && (
+        <div className={styles.extraField}>
+          <strong>金手指:</strong> {char.golden_finger}
+        </div>
+      )}
+      {char.motivation && (
+        <div className={styles.extraField}>
+          <strong>核心动机:</strong> {char.motivation}
+        </div>
+      )}
       {char.personality && (
         <div className={styles.personality}>{char.personality.slice(0, 60)}{char.personality.length > 60 ? '...' : ''}</div>
       )}

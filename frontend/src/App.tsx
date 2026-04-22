@@ -6,11 +6,16 @@ import OutlinePage from './pages/OutlinePage'
 import CharactersPage from './pages/CharactersPage'
 import WorldbuildingPage from './pages/WorldbuildingPage'
 import ChapterPage from './pages/ChapterPage'
+import AdminWorkflowPage from './pages/AdminWorkflowPage'
 import { antdTheme } from './styles/antdTheme'
 import './styles/global.css'
 
 function MainContent() {
   const { currentView, currentNovel } = useAppStore()
+
+  if (currentView === 'admin') {
+    return <AdminWorkflowPage />
+  }
 
   if (!currentNovel) {
     return (
@@ -31,6 +36,7 @@ function MainContent() {
     case 'worldbuilding': return <WorldbuildingPage />
     case 'chapter':
     case 'synopsis': return <ChapterPage />
+    case 'admin': return <AdminWorkflowPage />
     default: return null
   }
 }

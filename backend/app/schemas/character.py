@@ -5,6 +5,7 @@ from typing import Optional, Any
 
 class CharacterCreate(BaseModel):
     name: str
+    role: Optional[str] = None
     gender: Optional[str] = None
     age: Optional[int] = None
     race: Optional[str] = "人族"
@@ -16,6 +17,8 @@ class CharacterCreate(BaseModel):
     appearance: Optional[str] = None
     personality: Optional[str] = None
     background: Optional[str] = None
+    golden_finger: Optional[str] = None
+    motivation: Optional[str] = None
     relationships: list = []
     status: str = "alive"
     first_appearance_chapter: Optional[int] = None
@@ -23,6 +26,7 @@ class CharacterCreate(BaseModel):
 
 class CharacterUpdate(BaseModel):
     name: Optional[str] = None
+    role: Optional[str] = None
     gender: Optional[str] = None
     age: Optional[int] = None
     race: Optional[str] = None
@@ -34,6 +38,8 @@ class CharacterUpdate(BaseModel):
     appearance: Optional[str] = None
     personality: Optional[str] = None
     background: Optional[str] = None
+    golden_finger: Optional[str] = None
+    motivation: Optional[str] = None
     relationships: Optional[list] = None
     status: Optional[str] = None
     last_updated_chapter: Optional[int] = None
@@ -43,6 +49,7 @@ class CharacterOut(BaseModel):
     id: str
     novel_id: str
     name: str
+    role: Optional[str]
     gender: Optional[str]
     age: Optional[int]
     race: Optional[str]
@@ -54,6 +61,8 @@ class CharacterOut(BaseModel):
     appearance: Optional[str]
     personality: Optional[str]
     background: Optional[str]
+    golden_finger: Optional[str]
+    motivation: Optional[str]
     relationships: Optional[list]
     status: str
     first_appearance_chapter: Optional[int]

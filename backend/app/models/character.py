@@ -15,6 +15,7 @@ class Character(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
     novel_id: Mapped[str] = mapped_column(String(36), ForeignKey("novels.id", ondelete="CASCADE"))
     name: Mapped[str] = mapped_column(String(100), nullable=False)
+    role: Mapped[str | None] = mapped_column(String(50)) # 主角/女主/反派/配角
     gender: Mapped[str | None] = mapped_column(String(10))
     age: Mapped[int | None] = mapped_column(Integer)
     race: Mapped[str | None] = mapped_column(String(50), default="人族")
@@ -26,6 +27,8 @@ class Character(Base):
     appearance: Mapped[str | None] = mapped_column(Text)
     personality: Mapped[str | None] = mapped_column(Text)
     background: Mapped[str | None] = mapped_column(Text)
+    golden_finger: Mapped[str | None] = mapped_column(Text) # 金手指/特殊能力
+    motivation: Mapped[str | None] = mapped_column(Text) # 核心动机/执念
     relationships: Mapped[list | None] = mapped_column(JSON, default=list)
     status: Mapped[str] = mapped_column(
         Enum("alive", "dead", "unknown"), default="alive"

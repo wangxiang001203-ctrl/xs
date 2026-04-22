@@ -79,6 +79,28 @@
   margin-bottom: 4px;
 }
 
+.roleTag {
+  font-size: 11px;
+  color: var(--primary);
+  background: rgba(var(--primary-rgb), 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  display: inline-block;
+  margin-bottom: 6px;
+}
+
+.extraField {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  margin-bottom: 4px;
+}
+
+.extraField strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
 .realm {
   color: var(--accent);
 }

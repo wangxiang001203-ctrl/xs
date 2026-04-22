@@ -5,6 +5,7 @@ export interface Novel {
   title: string
   genre: string
   idea?: string
+  synopsis?: string
   status: 'draft' | 'writing' | 'completed'
   created_at: string
   updated_at: string
@@ -13,6 +14,10 @@ export interface Novel {
 export interface Outline {
   id: string
   novel_id: string
+  title?: string
+  synopsis?: string
+  selling_points?: string
+  main_plot?: string
   content?: string
   ai_generated: boolean
   confirmed: boolean
@@ -24,6 +29,7 @@ export interface Character {
   id: string
   novel_id: string
   name: string
+  role?: string
   gender?: string
   age?: number
   race?: string
@@ -35,6 +41,8 @@ export interface Character {
   appearance?: string
   personality?: string
   background?: string
+  golden_finger?: string
+  motivation?: string
   relationships?: Relationship[]
   status: 'alive' | 'dead' | 'unknown'
   first_appearance_chapter?: number
@@ -60,13 +68,11 @@ export interface Relationship {
 export interface Worldbuilding {
   id: string
   novel_id: string
-  realm_system?: RealmSystem
-  currency?: Currency
-  artifacts?: WorldArtifact[]
-  techniques?: WorldTechnique[]
-  factions?: Faction[]
-  geography?: Geography[]
-  custom_rules?: CustomRule[]
+  power_system?: Record<string, any>[]
+  factions?: Record<string, any>[]
+  geography?: Record<string, any>[]
+  core_rules?: Record<string, any>[]
+  items?: Record<string, any>[]
 }
 
 export interface RealmSystem {

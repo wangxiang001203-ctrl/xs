@@ -21,6 +21,23 @@ def save_outline(novel_id: str, content: str):
     path.write_text(content, encoding="utf-8")
 
 
+def save_synopsis(novel_id: str, content: str):
+    path = get_project_dir(novel_id) / "synopsis.md"
+    path.write_text(content, encoding="utf-8")
+
+
+def save_book_meta(novel_id: str, title: str, synopsis: str | None):
+    path = get_project_dir(novel_id) / "book_meta.json"
+    path.write_text(
+        json.dumps(
+            {"title": title, "synopsis": synopsis or ""},
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
 def save_characters(novel_id: str, characters_data: list):
     path = get_project_dir(novel_id) / "characters.json"
     path.write_text(

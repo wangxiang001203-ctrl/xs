@@ -4,6 +4,7 @@ from app.database import get_db
 from app.models import Novel
 from app.models.worldbuilding import Worldbuilding
 from app.schemas.project import NovelCreate, NovelUpdate, NovelOut
+from app.services.file_service import save_book_meta, save_synopsis
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -23,6 +24,9 @@ def create_novel(data: NovelCreate, db: Session = Depends(get_db)):
     db.add(wb)
     db.commit()
     db.refresh(novel)
+    save_book_meta(novel.id, novel.title, novel.synopsis)
+    if novel.synopsis:
+        save_synopsis(novel.id, novel.synopsis)
     return novel
 
 
@@ -43,6 +47,9 @@ def update_novel(novel_id: str, data: NovelUpdate, db: Session = Depends(get_db)
         setattr(novel, k, v)
     db.commit()
     db.refresh(novel)
+    save_book_meta(novel.id, novel.title, novel.synopsis)
+    if novel.synopsis:
+        save_synopsis(novel.id, novel.synopsis)
     return novel
 
 

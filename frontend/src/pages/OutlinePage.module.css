@@ -2,7 +2,8 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 16px;
   gap: 12px;
 }
@@ -94,6 +95,44 @@
   color: var(--text-primary);
 }
 
+.structuredOutline {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.fieldGroup {
+  margin-bottom: 24px;
+}
+
+.fieldGroup h3 {
+  font-size: 14px;
+  color: var(--accent);
+  margin-bottom: 8px;
+  border-left: 3px solid var(--accent);
+  padding-left: 8px;
+}
+
+.fieldGroup p {
+  font-size: 14px;
+  color: var(--text-primary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.plotContent {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--text-primary);
+  line-height: 1.8;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-base);
+  padding: 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
 .cursor {
   animation: blink 1s step-end infinite;
   color: var(--primary);
@@ -121,4 +160,25 @@
 
 .alert {
   flex-shrink: 0;
+}
+
+.postActions {
+  margin-top: 8px;
+}
+
+.titleRadioGroup {
+  margin-top: 10px;
+}
+
+.synopsisPreview {
+  margin-top: 10px;
+  margin-bottom: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+  white-space: pre-wrap;
+  line-height: 1.7;
+  font-size: 13px;
+  color: var(--text-primary);
 }

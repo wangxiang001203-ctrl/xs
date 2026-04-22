@@ -34,76 +34,85 @@ export default function WorldbuildingPage() {
   function generateWorldbuilding() {
     if (!currentNovel) return
     setGenerating(true)
-    setStreamText('')
-    streamGenerateWorldbuilding(
-      currentNovel.id,
-      chunk => setStreamText(prev => prev + chunk),
-      async () => {
+    setStreamText('AI 正在根据大纲推演世界观设定，请稍候...')
+    
+    fetch('/api/ai/generate/worldbuilding', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ novel_id: currentNovel.id })
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error('生成失败或请先生成大纲')
+        const data = await res.json()
+        setWorldbuilding(data)
+        setLocal(data)
+        message.success('世界观生成完成，已自动写入')
+      })
+      .catch(err => {
+        message.error(`生成失败：${err.message}`)
+      })
+      .finally(() => {
         setGenerating(false)
         setStreamText('')
-        message.success('世界观生成完成，已自动写入')
-        const wb = await api.worldbuilding.get(currentNovel.id).catch(() => null)
-        if (wb) { setWorldbuilding(wb); setLocal(wb) }
-      },
-      err => { setGenerating(false); message.error(`生成失败：${err}`) },
-    )
+      })
   }
 
   if (!currentNovel) return <div className={styles.empty}>请先选择小说</div>
 
   const tabs = [
     {
-      key: 'realm',
-      label: '境界体系',
-      children: <RealmTab local={local} setLocal={setLocal} />,
-    },
-    {
-      key: 'currency',
-      label: '灵石货币',
-      children: <CurrencyTab local={local} setLocal={setLocal} />,
+      key: 'power_system',
+      label: '力量/境界体系',
+      children: <ListTab
+        title="境界/能力"
+        items={local.power_system || []}
+        onChange={v => setLocal(p => ({ ...p, power_system: v }))}
+        fields={['name', 'description']}
+        labels={['境界/能力名称', '特征描述']}
+      />,
     },
     {
       key: 'factions',
-      label: '门派势力',
+      label: '势力/组织',
       children: <ListTab
         title="门派/势力"
         items={local.factions || []}
         onChange={v => setLocal(p => ({ ...p, factions: v }))}
-        fields={['name', 'type', 'location', 'desc']}
-        labels={['名称', '类型', '所在地', '简介']}
-      />,
-    },
-    {
-      key: 'artifacts',
-      label: '道具库',
-      children: <ListTab
-        title="公共道具"
-        items={local.artifacts || []}
-        onChange={v => setLocal(p => ({ ...p, artifacts: v }))}
-        fields={['name', 'grade', 'type', 'desc']}
-        labels={['名称', '品级', '类型', '描述']}
-      />,
-    },
-    {
-      key: 'techniques',
-      label: '功法库',
-      children: <ListTab
-        title="公共功法"
-        items={local.techniques || []}
-        onChange={v => setLocal(p => ({ ...p, techniques: v }))}
-        fields={['name', 'grade', 'type', 'desc']}
-        labels={['名称', '品级', '类型', '描述']}
+        fields={['name', 'type', 'description']}
+        labels={['名称', '类型', '宗旨与实力']}
       />,
     },
     {
       key: 'geography',
-      label: '地理',
+      label: '地理/地点',
       children: <ListTab
         title="地理位置"
         items={local.geography || []}
         onChange={v => setLocal(p => ({ ...p, geography: v }))}
-        fields={['name', 'type', 'desc']}
-        labels={['名称', '类型', '描述']}
+        fields={['name', 'description']}
+        labels={['名称', '地貌与特色']}
+      />,
+    },
+    {
+      key: 'core_rules',
+      label: '核心法则',
+      children: <ListTab
+        title="世界规则"
+        items={local.core_rules || []}
+        onChange={v => setLocal(p => ({ ...p, core_rules: v }))}
+        fields={['rule_name', 'description']}
+        labels={['法则名称', '具体表现与限制']}
+      />,
+    },
+    {
+      key: 'items',
+      label: '关键物品',
+      children: <ListTab
+        title="资源/道具"
+        items={local.items || []}
+        onChange={v => setLocal(p => ({ ...p, items: v }))}
+        fields={['name', 'description']}
+        labels={['物品名称', '作用与稀有度']}
       />,
     },
   ]
@@ -114,130 +123,22 @@ export default function WorldbuildingPage() {
         <span className={styles.title}>世界观设定</span>
         <div style={{ display: 'flex', gap: 8 }}>
           <Button size="small" icon={<ThunderboltOutlined />} loading={generating} onClick={generateWorldbuilding}>
-            AI生成世界观
+            AI推演世界观
           </Button>
           <Button type="primary" size="small" icon={<SaveOutlined />} loading={saving} onClick={save}>
             保存
           </Button>
         </div>
       </div>
-      {generating && streamText && (
-        <div style={{ padding: '8px 12px', background: 'var(--bg-secondary)', borderRadius: 4, margin: '0 0 8px', fontSize: 12, color: 'var(--text-secondary)', maxHeight: 100, overflow: 'auto' }}>
-          <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{streamText}</pre>
-        </div>
-      )}
       <Tabs items={tabs} className={styles.tabs} size="small" />
-    </div>
-  )
-}
-
-function RealmTab({ local, setLocal }: { local: Partial<Worldbuilding>; setLocal: (fn: (p: Partial<Worldbuilding>) => Partial<Worldbuilding>) => void }) {
-  const levels: RealmLevel[] = local.realm_system?.levels || []
-
-  function addLevel() {
-    const newLevel: RealmLevel = { name: '', level: levels.length + 1 }
-    setLocal(p => ({
-      ...p,
-      realm_system: { name: p.realm_system?.name || '修仙境界', levels: [...levels, newLevel] },
-    }))
-  }
-
-  function updateLevel(i: number, field: keyof RealmLevel, value: string | number) {
-    const updated = levels.map((l, idx) => idx === i ? { ...l, [field]: value } : l)
-    setLocal(p => ({ ...p, realm_system: { ...p.realm_system!, levels: updated } }))
-  }
-
-  function removeLevel(i: number) {
-    const updated = levels.filter((_, idx) => idx !== i)
-    setLocal(p => ({ ...p, realm_system: { ...p.realm_system!, levels: updated } }))
-  }
-
-  return (
-    <div className={styles.tabContent}>
-      <div className={styles.fieldRow}>
-        <label>体系名称</label>
-        <Input
-          value={local.realm_system?.name || ''}
-          onChange={e => setLocal(p => ({ ...p, realm_system: { ...p.realm_system!, name: e.target.value } }))}
-          placeholder="修仙境界体系"
-          style={{ width: 200 }}
-        />
-      </div>
-      <div className={styles.levelList}>
-        {levels.map((l, i) => (
-          <div key={i} className={styles.levelRow}>
-            <span className={styles.levelNum}>{i + 1}</span>
-            <Input
-              value={l.name}
-              onChange={e => updateLevel(i, 'name', e.target.value)}
-              placeholder="境界名称"
-              style={{ width: 120 }}
-            />
-            <InputNumber
-              value={l.sub_levels}
-              onChange={v => updateLevel(i, 'sub_levels', v || 0)}
-              placeholder="层数"
-              min={0}
-              style={{ width: 70 }}
-            />
-            <Input
-              value={l.desc || ''}
-              onChange={e => updateLevel(i, 'desc', e.target.value)}
-              placeholder="描述"
-              style={{ flex: 1 }}
-            />
-            <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={() => removeLevel(i)} />
-          </div>
-        ))}
-        <Button size="small" icon={<PlusOutlined />} onClick={addLevel}>添加境界</Button>
-      </div>
-    </div>
-  )
-}
-
-function CurrencyTab({ local, setLocal }: { local: Partial<Worldbuilding>; setLocal: (fn: (p: Partial<Worldbuilding>) => Partial<Worldbuilding>) => void }) {
-  const currency = local.currency || { name: '灵石', units: [], exchange_rate: [], note: '' }
-
-  function update(field: string, value: unknown) {
-    setLocal(p => ({ ...p, currency: { ...currency, [field]: value } }))
-  }
-
-  return (
-    <div className={styles.tabContent}>
-      <div className={styles.fieldRow}>
-        <label>货币名称</label>
-        <Input value={currency.name} onChange={e => update('name', e.target.value)} style={{ width: 150 }} />
-      </div>
-      <div className={styles.fieldRow}>
-        <label>单位（逗号分隔）</label>
-        <Input
-          value={(currency.units || []).join('、')}
-          onChange={e => update('units', e.target.value.split(/[,，、]/).map(s => s.trim()).filter(Boolean))}
-          placeholder="下品灵石、中品灵石、上品灵石、极品灵石"
-          style={{ width: 400 }}
-        />
-      </div>
-      <div className={styles.fieldRow}>
-        <label>兑换比例（逗号分隔）</label>
-        <Input
-          value={(currency.exchange_rate || []).join(',')}
-          onChange={e => update('exchange_rate', e.target.value.split(',').map(s => Number(s.trim())).filter(n => !isNaN(n)))}
-          placeholder="100,100,100"
-          style={{ width: 200 }}
-        />
-      </div>
-      <div className={styles.fieldRow}>
-        <label>备注</label>
-        <Input value={currency.note || ''} onChange={e => update('note', e.target.value)} style={{ width: 400 }} />
-      </div>
     </div>
   )
 }
 
 function ListTab({ title, items, onChange, fields, labels }: {
   title: string
-  items: Record<string, string>[]
-  onChange: (v: Record<string, string>[]) => void
+  items: Record<string, any>[]
+  onChange: (v: Record<string, any>[]) => void
   fields: string[]
   labels: string[]
 }) {

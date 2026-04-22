@@ -1,0 +1,26 @@
+.shell {
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg-base);
+}
+
+.sider {
+  background: var(--bg-panel) !important;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.main {
+  background: var(--bg-base);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.right {
+  background: var(--bg-panel) !important;
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+  overflow-x: hidden;
+}

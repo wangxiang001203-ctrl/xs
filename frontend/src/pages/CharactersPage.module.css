@@ -1,0 +1,133 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  padding: 16px;
+  gap: 12px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+.title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.count {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 4px;
+}
+
+.grid {
+  flex: 1;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+  align-content: start;
+}
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  transition: border-color 0.15s;
+}
+
+.card:hover {
+  border-color: var(--border-light);
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.charName {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.cardActions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.card:hover .cardActions {
+  opacity: 1;
+}
+
+.cardMeta {
+  display: flex;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.realm {
+  color: var(--accent);
+}
+
+.faction {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.personality {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 6px;
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-bottom: 6px;
+}
+
+.techTag {
+  font-size: 10px !important;
+  padding: 0 4px !important;
+  background: rgba(201, 168, 76, 0.1) !important;
+  border-color: rgba(201, 168, 76, 0.3) !important;
+  color: var(--accent) !important;
+}
+
+.statusTag {
+  font-size: 10px !important;
+}
+
+.formRow {
+  display: flex;
+  gap: 12px;
+}
+
+.empty, .emptyGrid {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  gap: 8px;
+  font-size: 12px;
+  grid-column: 1 / -1;
+}

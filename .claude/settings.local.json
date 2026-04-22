@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip3 install *)",
+      "Bash(timeout 8 uvicorn app.main:app --port 8000)",
+      "Bash(python3 -m uvicorn app.main:app --port 8000)",
+      "Bash(mysql -u root -e \"SHOW DATABASES;\")",
+      "Bash(mysql -u root -e \"CREATE DATABASE IF NOT EXISTS novel_ai CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\")",
+      "Bash(curl -s -X POST https://ark.cn-beijing.volces.com/api/v3/chat/completions -H 'Content-Type: application/json' -H 'Authorization: Bearer ark-3936be89-a551-4b55-8b74-f0e21375bbf2-bdeae' -d '{ *)",
+      "Bash(curl -s https://ark.cn-beijing.volces.com/api/v3/endpoints -H 'Authorization: Bearer ark-3936be89-a551-4b55-8b74-f0e21375bbf2-bdeae')",
+      "Bash(curl -s -X GET https://ark.cn-beijing.volces.com/api/v3/models -H 'Authorization: Bearer ark-3936be89-a551-4b55-8b74-f0e21375bbf2-bdeae')",
+      "Bash(python3 -c ' *)",
+      "Bash(curl -s http://localhost:8000/health)",
+      "Bash(curl -s http://localhost:8000/openapi.json)"
+    ]
+  }
+}

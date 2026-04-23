@@ -16,13 +16,52 @@ Base.metadata.create_all(bind=engine)
 def _ensure_schema():
     """开发环境轻量补列，避免本地旧库缺字段导致启动失败。"""
     inspector = inspect(engine)
-    if "novels" not in inspector.get_table_names():
-        return
-    columns = {col["name"] for col in inspector.get_columns("novels")}
-    if "synopsis" in columns:
+    tables = set(inspector.get_table_names())
+    alter_sqls: list[str] = []
+
+    if "novels" in tables:
+        columns = {col["name"] for col in inspector.get_columns("novels")}
+        if "synopsis" not in columns:
+            alter_sqls.append("ALTER TABLE novels ADD COLUMN synopsis TEXT")
+
+    if "outlines" in tables:
+        columns = {col["name"] for col in inspector.get_columns("outlines")}
+        if "title" not in columns:
+            alter_sqls.append("ALTER TABLE outlines ADD COLUMN title VARCHAR(200)")
+        if "synopsis" not in columns:
+            alter_sqls.append("ALTER TABLE outlines ADD COLUMN synopsis TEXT")
+        if "selling_points" not in columns:
+            alter_sqls.append("ALTER TABLE outlines ADD COLUMN selling_points TEXT")
+        if "main_plot" not in columns:
+            alter_sqls.append("ALTER TABLE outlines ADD COLUMN main_plot LONGTEXT")
+
+    if "characters" in tables:
+        columns = {col["name"] for col in inspector.get_columns("characters")}
+        if "role" not in columns:
+            alter_sqls.append("ALTER TABLE characters ADD COLUMN `role` VARCHAR(50)")
+        if "golden_finger" not in columns:
+            alter_sqls.append("ALTER TABLE characters ADD COLUMN golden_finger TEXT")
+        if "motivation" not in columns:
+            alter_sqls.append("ALTER TABLE characters ADD COLUMN motivation TEXT")
+
+    if "worldbuilding" in tables:
+        columns = {col["name"] for col in inspector.get_columns("worldbuilding")}
+        if "overview" not in columns:
+            alter_sqls.append("ALTER TABLE worldbuilding ADD COLUMN overview TEXT")
+        if "sections" not in columns:
+            alter_sqls.append("ALTER TABLE worldbuilding ADD COLUMN sections JSON")
+        if "power_system" not in columns:
+            alter_sqls.append("ALTER TABLE worldbuilding ADD COLUMN power_system JSON")
+        if "core_rules" not in columns:
+            alter_sqls.append("ALTER TABLE worldbuilding ADD COLUMN core_rules JSON")
+        if "items" not in columns:
+            alter_sqls.append("ALTER TABLE worldbuilding ADD COLUMN items JSON")
+
+    if not alter_sqls:
         return
     with engine.begin() as conn:
-        conn.execute(text("ALTER TABLE novels ADD COLUMN synopsis TEXT"))
+        for sql in alter_sqls:
+            conn.execute(text(sql))
 
 
 _ensure_schema()

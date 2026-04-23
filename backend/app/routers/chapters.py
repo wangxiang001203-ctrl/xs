@@ -6,7 +6,7 @@ from app.schemas.chapter import (
     ChapterCreate, ChapterUpdate, ChapterOut, ChapterContentOut,
     SynopsisCreate, SynopsisOut,
 )
-from app.services.file_service import save_chapter_content, append_plot_summary
+from app.services.file_service import save_chapter_content, save_chapter_synopsis, append_plot_summary
 from app.services.validator import validate_synopsis_characters
 
 router = APIRouter(prefix="/api/projects/{novel_id}/chapters", tags=["chapters"])
@@ -119,4 +119,9 @@ def upsert_synopsis(
 
     db.commit()
     db.refresh(synopsis)
+    chapter = db.query(Chapter).filter(
+        Chapter.id == chapter_id, Chapter.novel_id == novel_id
+    ).first()
+    if chapter:
+        save_chapter_synopsis(novel_id, chapter.chapter_number, SynopsisOut.model_validate(synopsis).model_dump(mode="json"))
     return synopsis

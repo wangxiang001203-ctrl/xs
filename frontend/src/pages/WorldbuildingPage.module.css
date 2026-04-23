@@ -9,8 +9,9 @@
 
 .header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
+  gap: 16px;
   flex-shrink: 0;
 }
 
@@ -20,74 +21,113 @@
   color: var(--text-primary);
 }
 
-.tabs {
-  flex: 1;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.tabs :global(.ant-tabs-content-holder) {
-  overflow-y: auto;
-}
-
-.tabContent {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 4px 0;
-}
-
-.fieldRow {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.subtitle {
+  margin-top: 4px;
   font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.fieldRow label {
-  width: 80px;
-  flex-shrink: 0;
+  line-height: 1.6;
   color: var(--text-muted);
+  max-width: 720px;
 }
 
-.levelList {
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.scrollArea {
+  flex: 1;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 12px;
+  padding-right: 4px;
 }
 
-.levelRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.tabs :global(.ant-tabs-nav) {
+  margin-bottom: 12px;
 }
 
-.levelNum {
-  width: 20px;
-  text-align: center;
-  font-size: 11px;
-  color: var(--text-muted);
-  flex-shrink: 0;
+.tabs :global(.ant-tabs-tab) {
+  padding: 10px 14px;
 }
 
-.listSection {
+.tabs :global(.ant-tabs-tab-active .ant-tabs-tab-btn) {
+  font-weight: 600;
+}
+
+.tabPanel {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 12px;
 }
 
-.listItem {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.overviewCard,
+.sectionCard {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 6px 8px;
+  border-radius: var(--radius);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
+.cardTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sectionName {
+  flex: 1;
+}
+
+.sectionActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.entries {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.entryCard {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.entryHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.entryHeader :global(.ant-input) {
+  flex: 1;
+}
+
+.entryEmpty {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 8px 0 2px;
+}
+
+.emptyState,
 .empty {
   display: flex;
   align-items: center;
@@ -95,4 +135,21 @@
   height: 100%;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .header,
+  .sectionHeader {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .actions,
+  .sectionActions {
+    width: 100%;
+  }
+
+  .tabs :global(.ant-tabs-nav) {
+    margin-bottom: 8px;
+  }
 }

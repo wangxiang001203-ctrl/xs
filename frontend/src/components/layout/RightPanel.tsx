@@ -3,6 +3,9 @@ import styles from './RightPanel.module.css'
 
 export default function RightPanel() {
   const { currentNovel, currentChapter, characters, worldbuilding } = useAppStore()
+  const powerTags = (worldbuilding?.power_system || [])
+    .map((item) => (typeof item === 'object' ? item?.name : String(item)))
+    .filter(Boolean)
 
   if (!currentNovel) {
     return (
@@ -17,12 +20,12 @@ export default function RightPanel() {
       <div className={styles.header}>上下文</div>
 
       {/* 世界观速览 */}
-      {worldbuilding?.realm_system && (
-        <Section title="境界体系">
+      {powerTags.length > 0 && (
+        <Section title="力量体系">
           <div className={styles.realmList}>
-            {worldbuilding.realm_system.levels?.map((l, i) => (
+            {powerTags.slice(0, 8).map((name, i) => (
               <span key={i} className={styles.realmTag}>
-                {typeof l === 'string' ? l : l.name}
+                {name}
               </span>
             ))}
           </div>

@@ -25,10 +25,37 @@
   color: var(--text-secondary) !important;
 }
 
+.modelConfigCard {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+  background: linear-gradient(180deg, rgba(81, 139, 255, 0.06), transparent);
+}
+
+.modelConfigTitle {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.modelSelect {
+  width: 100%;
+}
+
+.modelHint {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
 .novelList {
   padding: 6px 0;
   border-bottom: 1px solid var(--border);
-  max-height: 160px;
+  max-height: 132px;
   overflow-y: auto;
   flex-shrink: 0;
 }

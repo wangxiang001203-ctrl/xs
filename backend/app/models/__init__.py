@@ -5,8 +5,9 @@ from app.models.volume import Volume
 from app.models.chapter import Chapter
 from app.models.synopsis import Synopsis
 from app.models.ai_history import AIContextSnapshot
+from app.models.ai_job import AIGenerationJob
 
 __all__ = [
     "Novel", "Outline", "Character", "Worldbuilding",
-    "Volume", "Chapter", "Synopsis", "AIContextSnapshot",
+    "Volume", "Chapter", "Synopsis", "AIContextSnapshot", "AIGenerationJob",
 ]

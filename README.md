@@ -14,11 +14,22 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# 配置智谱AI Key
-echo "ZHIPU_API_KEY=your_key_here" >> .env
+# 配置 Doubao / 火山方舟 Key（标准位置：backend/.env）
+cat > .env <<'EOF'
+DATABASE_URL=mysql+pymysql://root:@localhost:3306/novel_ai
+ARK_API_KEY=your_ark_key_here
+STORAGE_PATH=./storage/projects
+SECRET_KEY=change_this_in_production_32chars_min
+CORS_ORIGINS=http://localhost:5173
+EOF
 
 # 启动
 uvicorn app.main:app --reload --port 8000
+```
+
+也支持从仓库根目录启动，后端会优先读取 `backend/.env`，并兼容根目录 `.env`：
+```bash
+backend/venv/bin/uvicorn app.main:app --app-dir backend --reload --port 8000
 ```
 
 ### 3. 前端
@@ -46,7 +57,7 @@ xs/
 │   │   ├── routers/             # API路由
 │   │   └── services/
 │   │       ├── context_builder.py  # AI上下文构建（核心）
-│   │       ├── ai_service.py       # 智谱AI封装
+│   │       ├── ai_service.py       # 豆包 / 火山方舟封装
 │   │       ├── validator.py        # 细纲人物校验
 │   │       └── file_service.py     # 文件系统同步
 │   └── storage/projects/        # 小说文件存储
@@ -59,7 +70,7 @@ xs/
         │   ├── WorldbuildingPage.tsx # 世界观设定
         │   └── ChapterPage.tsx      # 细纲+正文编辑器
         ├── components/layout/       # 三栏布局
-        ├── api/                     # HTTP + SSE
+        ├── api/                     # HTTP + AI任务轮询
         ├── store/                   # Zustand状态
         └── styles/                  # 东方风主题
 ```
@@ -88,7 +99,7 @@ xs/
 循环（每章）：
   AI生成细纲 → 校验人物 → 确认细纲
     ↓
-  AI生成正文 → 编辑润色 → 完成章节
+  AI生成正文（非流式任务）→ 编辑润色 → 完成章节
     ↓
   自动更新主线剧情缩略
 ```

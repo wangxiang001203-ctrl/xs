@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Button, Modal, Form, Input, InputNumber, Select, Tag, message, Popconfirm, Tooltip } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, UserOutlined, ThunderboltOutlined } from '@ant-design/icons'
-import { api, streamGenerateCharacters } from '../api'
+import { api } from '../api'
 import { useAppStore } from '../store'
 import type { Character } from '../types'
 import styles from './CharactersPage.module.css'
@@ -14,7 +14,6 @@ export default function CharactersPage() {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Character | null>(null)
   const [generating, setGenerating] = useState(false)
-  const [streamText, setStreamText] = useState('')
   const [form] = Form.useForm()
 
   function openCreate() {
@@ -67,28 +66,17 @@ export default function CharactersPage() {
   function generateCharacters() {
     if (!currentNovel) return
     setGenerating(true)
-    setStreamText('AI 正在从大纲提取核心角色，请稍候...')
-    
-    fetch('/api/ai/generate/characters', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ novel_id: currentNovel.id })
-    })
-      .then(async (res) => {
-        if (!res.ok) throw new Error('生成失败或请先生成大纲')
-        const newChars = await res.json()
-        
-        // 刷新角色列表
+    api.ai.generateCharactersFromOutline(currentNovel.id)
+      .then(async (newChars) => {
         const chars = await api.characters.list(currentNovel.id)
         setCharacters(chars)
         message.success(`成功生成 ${newChars.length} 个核心角色`)
       })
-      .catch(err => {
-        message.error(err.message)
+      .catch((err: any) => {
+        message.error(err?.response?.data?.detail || '生成失败或请先生成大纲')
       })
       .finally(() => {
         setGenerating(false)
-        setStreamText('')
       })
   }
 
@@ -111,12 +99,6 @@ export default function CharactersPage() {
           </Button>
         </div>
       </div>
-
-      {generating && streamText && (
-        <div style={{ padding: '8px 12px', background: 'var(--bg-secondary)', borderRadius: 4, margin: '0 0 12px', fontSize: 12, color: 'var(--text-secondary)', maxHeight: 120, overflow: 'auto' }}>
-          <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{streamText}</pre>
-        </div>
-      )}
 
       <div className={styles.grid}>
         {characters.map(char => (

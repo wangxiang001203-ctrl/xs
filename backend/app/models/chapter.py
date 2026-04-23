@@ -11,21 +11,26 @@ def gen_uuid() -> str:
 
 class Chapter(Base):
     __tablename__ = "chapters"
+    __table_args__ = {"comment": "章节正文表"}
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
-    novel_id: Mapped[str] = mapped_column(String(36), ForeignKey("novels.id", ondelete="CASCADE"))
-    volume_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("volumes.id", ondelete="SET NULL"), nullable=True)
-    chapter_number: Mapped[int] = mapped_column(Integer, nullable=False)
-    title: Mapped[str | None] = mapped_column(String(200))
-    content: Mapped[str | None] = mapped_column(Text(length=4294967295))
-    word_count: Mapped[int] = mapped_column(Integer, default=0)
-    plot_summary: Mapped[str | None] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(
-        Enum("draft", "writing", "completed"), default="draft"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid, comment="章节ID")
+    novel_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("novels.id", ondelete="CASCADE"), comment="所属小说ID"
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    volume_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("volumes.id", ondelete="SET NULL"), nullable=True, comment="所属卷ID"
+    )
+    chapter_number: Mapped[int] = mapped_column(Integer, nullable=False, comment="章节序号")
+    title: Mapped[str | None] = mapped_column(String(200), comment="章节标题")
+    content: Mapped[str | None] = mapped_column(Text(length=4294967295), comment="章节正文")
+    word_count: Mapped[int] = mapped_column(Integer, default=0, comment="章节字数")
+    plot_summary: Mapped[str | None] = mapped_column(Text, comment="章节剧情摘要")
+    status: Mapped[str] = mapped_column(
+        Enum("draft", "writing", "completed"), default="draft", comment="章节状态"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, comment="创建时间")
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, comment="更新时间"
     )
 
     novel: Mapped["Novel"] = relationship(back_populates="chapters")

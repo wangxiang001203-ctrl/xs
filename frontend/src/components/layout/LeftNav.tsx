@@ -6,33 +6,41 @@ import {
   FolderOutlined, ThunderboltOutlined, DownOutlined, RightOutlined,
   SettingOutlined,
 } from '@ant-design/icons'
-import { api, streamVolumeSynopsis } from '../../api'
+import { api } from '../../api'
 import { useAppStore } from '../../store'
-import type { Novel, Chapter, Volume } from '../../types'
+import type { ModelProviderConfig, Novel, Chapter, Volume, WorkflowConfig } from '../../types'
 import styles from './LeftNav.module.css'
 
 export default function LeftNav() {
   const {
-    currentNovel, setCurrentNovel,
-    currentView, setCurrentView,
+    currentNovel,
+    currentView,
     currentChapter, setCurrentChapter,
     setCharacters, setWorldbuilding, setChapters,
     chapters, volumes, setVolumes,
+    openTab,
   } = useAppStore()
 
   const [novels, setNovels] = useState<Novel[]>([])
   const [loading, setLoading] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [volumeOpen, setVolumeOpen] = useState(false)
-  const [assignOpen, setAssignOpen] = useState<{ volumeId: string } | null>(null)
   const [collapsedVolumes, setCollapsedVolumes] = useState<Set<string>>(new Set())
   const [generatingVolume, setGeneratingVolume] = useState<string | null>(null)
+  const [workflowConfig, setWorkflowConfig] = useState<WorkflowConfig | null>(null)
+  const [savingModelConfig, setSavingModelConfig] = useState(false)
   const [form] = Form.useForm()
   const [volumeForm] = Form.useForm()
 
   useEffect(() => {
     loadNovels()
+    loadWorkflowConfig()
   }, [])
+
+  useEffect(() => {
+    if (!currentNovel) return
+    setNovels(prev => prev.map(n => (n.id === currentNovel.id ? { ...n, ...currentNovel } : n)))
+  }, [currentNovel?.id, currentNovel?.title, currentNovel?.synopsis, currentNovel?.updated_at])
 
   async function loadNovels() {
     setLoading(true)
@@ -44,10 +52,17 @@ export default function LeftNav() {
     }
   }
 
+  async function loadWorkflowConfig() {
+    try {
+      const config = await api.admin.getWorkflowConfig()
+      setWorkflowConfig(config)
+    } catch {
+      message.error('加载模型配置失败')
+    }
+  }
+
   async function selectNovel(novel: Novel) {
-    setCurrentNovel(novel)
-    setCurrentView('outline')
-    setCurrentChapter(null)
+    openTab({ type: 'outline', novelSnapshot: novel })
     const [chars, wb, chs, vols] = await Promise.all([
       api.characters.list(novel.id),
       api.worldbuilding.get(novel.id).catch(() => null),
@@ -85,11 +100,12 @@ export default function LeftNav() {
         const updated = { ...ch, volume_id: volumeId }
         setChapters([...chapters, updated])
         setCurrentChapter(updated)
+        openTab({ type: 'chapter', novelSnapshot: currentNovel, chapterSnapshot: updated })
       } else {
         setChapters([...chapters, ch])
         setCurrentChapter(ch)
+        openTab({ type: 'chapter', novelSnapshot: currentNovel, chapterSnapshot: ch })
       }
-      setCurrentView('synopsis')
     } catch {
       message.error('创建章节失败')
     }
@@ -125,24 +141,65 @@ export default function LeftNav() {
     if (!currentNovel) return
     setGeneratingVolume(volume.id)
     try {
-      const res = await fetch('/api/ai/generate/volume-synopsis', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ novel_id: currentNovel.id, volume_id: volume.id })
-      })
-      if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.detail || '生成失败')
-      }
-      message.success(`《${volume.title}》细纲生成完成`)
-      // 刷新卷状态
-      const vols = await api.volumes.list(currentNovel.id)
+      const result = await api.ai.generateVolumeSynopsis(currentNovel.id, volume.id)
+      const [vols, chs] = await Promise.all([
+        api.volumes.list(currentNovel.id),
+        api.chapters.list(currentNovel.id),
+      ])
       setVolumes(vols)
+      setChapters(chs)
+      if (result.auto_created_characters && result.auto_created_characters.length > 0) {
+        const chars = await api.characters.list(currentNovel.id)
+        setCharacters(chars)
+      }
+      message.success(`《${volume.title}》细纲生成完成，已同步 ${result.chapter_count || chs.filter(ch => ch.volume_id === volume.id).length} 章`)
     } catch (err: any) {
-      message.error(`生成失败：${err.message}`)
+      message.error(`生成失败：${err?.response?.data?.detail || err.message}`)
     } finally {
       setGeneratingVolume(null)
     }
+  }
+
+  async function saveModelConfig(nextProviderId: string, nextModelId: string) {
+    if (!workflowConfig) return
+    const previous = workflowConfig
+    const nextConfig: WorkflowConfig = {
+      ...workflowConfig,
+      model_config: {
+        ...workflowConfig.model_config,
+        active_provider: nextProviderId,
+        active_model: nextModelId,
+      },
+    }
+    setWorkflowConfig(nextConfig)
+    setSavingModelConfig(true)
+    try {
+      const saved = await api.admin.updateWorkflowConfig(nextConfig)
+      setWorkflowConfig(saved)
+      message.success('模型配置已切换')
+    } catch {
+      setWorkflowConfig(previous)
+      message.error('模型配置保存失败')
+    } finally {
+      setSavingModelConfig(false)
+    }
+  }
+
+  const providers = workflowConfig?.model_config?.providers || []
+  const activeProvider = providers.find(p => p.id === workflowConfig?.model_config?.active_provider) || providers[0]
+  const activeModelId = workflowConfig?.model_config?.active_model || activeProvider?.models?.[0]?.id
+
+  function handleProviderChange(providerId: string) {
+    const provider = providers.find(item => item.id === providerId)
+    if (!provider) return
+    const nextModelId = provider.models?.[0]?.id
+    if (!nextModelId) return
+    void saveModelConfig(providerId, nextModelId)
+  }
+
+  function handleModelChange(modelId: string) {
+    if (!activeProvider) return
+    void saveModelConfig(activeProvider.id, modelId)
   }
 
   function toggleVolume(volumeId: string) {
@@ -171,6 +228,37 @@ export default function LeftNav() {
         </Tooltip>
       </div>
 
+      <div className={styles.modelConfigCard}>
+        <div className={styles.modelConfigTitle}>模型配置</div>
+        <Select
+          size="small"
+          className={styles.modelSelect}
+          placeholder="选择提供商"
+          value={activeProvider?.id}
+          options={providers.map((provider: ModelProviderConfig) => ({
+            value: provider.id,
+            label: provider.name,
+          }))}
+          onChange={handleProviderChange}
+          loading={!workflowConfig}
+          disabled={savingModelConfig || !providers.length}
+        />
+        <Select
+          size="small"
+          className={styles.modelSelect}
+          placeholder="选择模型"
+          value={activeModelId}
+          options={(activeProvider?.models || []).map(model => ({
+            value: model.id,
+            label: model.name,
+          }))}
+          onChange={handleModelChange}
+          loading={savingModelConfig}
+          disabled={savingModelConfig || !activeProvider}
+        />
+        <div className={styles.modelHint}>当前先走豆包，同一 API Key，后续可扩展更多提供商。</div>
+      </div>
+
       {/* 小说列表 */}
       <div className={styles.novelList}>
         {loading ? <Spin size="small" style={{ margin: '12px auto', display: 'block' }} /> : null}
@@ -191,7 +279,7 @@ export default function LeftNav() {
           icon={<SettingOutlined />}
           label="后台流程配置"
           active={currentView === 'admin'}
-          onClick={() => { setCurrentView('admin'); setCurrentChapter(null) }}
+          onClick={() => { openTab({ type: 'admin', closable: false }); setCurrentChapter(null) }}
         />
       </div>
 
@@ -204,19 +292,25 @@ export default function LeftNav() {
             icon={<UnorderedListOutlined />}
             label="大纲"
             active={currentView === 'outline'}
-            onClick={() => { setCurrentView('outline'); setCurrentChapter(null) }}
+            onClick={() => { openTab({ type: 'outline', novelSnapshot: currentNovel }); setCurrentChapter(null) }}
+          />
+          <NavItem
+            icon={<FileTextOutlined />}
+            label="简介"
+            active={currentView === 'novel_synopsis'}
+            onClick={() => { openTab({ type: 'novel_synopsis', novelSnapshot: currentNovel }); setCurrentChapter(null) }}
           />
           <NavItem
             icon={<UserOutlined />}
             label="角色"
             active={currentView === 'characters'}
-            onClick={() => { setCurrentView('characters'); setCurrentChapter(null) }}
+            onClick={() => { openTab({ type: 'characters', novelSnapshot: currentNovel }); setCurrentChapter(null) }}
           />
           <NavItem
             icon={<GlobalOutlined />}
             label="世界观设定"
             active={currentView === 'worldbuilding'}
-            onClick={() => { setCurrentView('worldbuilding'); setCurrentChapter(null) }}
+            onClick={() => { openTab({ type: 'worldbuilding', novelSnapshot: currentNovel }); setCurrentChapter(null) }}
           />
 
           {/* 卷列表 */}
@@ -268,7 +362,7 @@ export default function LeftNav() {
                       key={ch.id}
                       ch={ch}
                       active={currentChapter?.id === ch.id}
-                      onClick={() => { setCurrentChapter(ch); setCurrentView('chapter') }}
+                      onClick={() => { setCurrentChapter(ch); openTab({ type: 'chapter', novelSnapshot: currentNovel, chapterSnapshot: ch }) }}
                     />
                   ))}
                 </div>
@@ -281,7 +375,7 @@ export default function LeftNav() {
                 key={ch.id}
                 ch={ch}
                 active={currentChapter?.id === ch.id}
-                onClick={() => { setCurrentChapter(ch); setCurrentView('chapter') }}
+                onClick={() => { setCurrentChapter(ch); openTab({ type: 'chapter', novelSnapshot: currentNovel, chapterSnapshot: ch }) }}
               />
             ))}
           </div>

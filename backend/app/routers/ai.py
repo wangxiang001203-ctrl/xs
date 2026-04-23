@@ -1,32 +1,52 @@
 import json
 import re
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
-from app.database import get_db
-from app.schemas.ai_request import (
-    GenerateOutlineRequest,
-    GenerateTitlesRequest,
-    GenerateBookSynopsisRequest,
-    GenerateSynopsisRequest,
-    GenerateChapterRequest,
-    ValidateSynopsisRequest,
-    GenerateVolumeSynopsisRequest,
-    GenerateCharactersFromSynopsisRequest,
-    GenerateWorldbuildingRequest,
-    GenerateChapterSegmentRequest,
-    ChatRequest,
-)
-from app.services import ai_service, context_builder
-from app.services.validator import validate_synopsis_characters
-from app.models import Novel, Character
+
+from app.database import SessionLocal, get_db
+from app.models import AIGenerationJob, Character, Novel
+from app.models.chapter import Chapter
 from app.models.project import Outline
+from app.models.synopsis import Synopsis
 from app.models.volume import Volume
 from app.models.worldbuilding import Worldbuilding
-from app.models.chapter import Chapter
-from app.models.synopsis import Synopsis
-from app.services.file_service import save_synopsis, save_book_meta
+from app.schemas.ai_job import AIGenerationJobOut
+from app.schemas.ai_request import (
+    ChatRequest,
+    CreateMissingCharactersRequest,
+    GenerateBookSynopsisRequest,
+    GenerateChapterRequest,
+    GenerateChapterSegmentRequest,
+    GenerateCharactersFromOutlineRequest,
+    GenerateOutlineRequest,
+    GenerateSynopsisRequest,
+    GenerateTitlesRequest,
+    GenerateVolumeSynopsisRequest,
+    GenerateWorldbuildingRequest,
+    ValidateSynopsisRequest,
+)
+from app.schemas.chapter import ChapterContentOut, SynopsisOut
+from app.schemas.character import CharacterOut
+from app.schemas.project import OutlineOut
+from app.schemas.worldbuilding import WorldbuildingOut
+from app.services import ai_job_service, ai_service, context_builder
+from app.services.file_service import (
+    save_book_meta,
+    save_chapter_content,
+    save_chapter_synopsis,
+    save_characters,
+    save_synopsis,
+    save_worldbuilding,
+)
+from app.services.validator import validate_synopsis_characters
 from app.services.workflow_config_service import get_workflow_config
+from app.services.worldbuilding_service import (
+    apply_worldbuilding_document,
+    load_worldbuilding_document,
+    merge_worldbuilding_documents,
+    normalize_worldbuilding_document,
+)
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -44,85 +64,459 @@ def _prompt_config() -> dict[str, str]:
     }
 
 
-async def _sse_stream(generator):
-    """将异步生成器包装为SSE格式"""
-    try:
-        async for chunk in generator:
-            data = json.dumps({"text": chunk}, ensure_ascii=False)
-            yield f"data: {data}\n\n"
-        yield "data: [DONE]\n\n"
-    except Exception as e:
-        yield f"data: {json.dumps({'error': str(e)})}\n\n"
-
-
 def _extract_json(text: str):
-    """从AI输出中提取JSON，兼容markdown代码块包裹"""
-    # 尝试提取 ```json ... ``` 块
-    m = re.search(r'```(?:json)?\s*([\s\S]+?)\s*```', text)
+    m = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", text)
     if m:
         return m.group(1).strip()
     return text.strip()
 
 
-@router.post("/generate/outline")
-async def generate_outline(req: GenerateOutlineRequest, db: Session = Depends(get_db)):
-    """结构化生成大纲"""
-    novel = db.query(Novel).filter(Novel.id == req.novel_id).first()
+def _safe_text(value, default: str = "") -> str:
+    if value is None:
+        return default
+    text = str(value).strip()
+    return text or default
+
+
+def _safe_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_list(value) -> list:
+    if isinstance(value, list):
+        return value
+    return []
+
+
+def _normalize_outline_struct(payload: dict, genre: str) -> dict:
+    outline_struct = payload.get("outline_struct") or {}
+    protagonist = outline_struct.get("protagonist") or {}
+    world_seed = outline_struct.get("world_seed") or {}
+
+    volumes = []
+    for index, item in enumerate(_safe_list(outline_struct.get("volumes")), start=1):
+        volumes.append(
+            {
+                "volume_no": _safe_int(item.get("volume_no"), index),
+                "title": _safe_text(item.get("title"), f"第{index}卷"),
+                "target_words": _safe_int(item.get("target_words"), 30000),
+                "chapter_count": _safe_int(item.get("chapter_count"), 12),
+                "main_line": _safe_text(item.get("main_line"), "待补充"),
+                "character_arc": _safe_text(item.get("character_arc"), "待补充"),
+                "ending_hook": _safe_text(item.get("ending_hook"), "待补充"),
+            }
+        )
+    if not volumes:
+        volumes = [
+            {
+                "volume_no": 1,
+                "title": "第一卷",
+                "target_words": 30000,
+                "chapter_count": 12,
+                "main_line": "待补充",
+                "character_arc": "待补充",
+                "ending_hook": "待补充",
+            }
+        ]
+
+    return {
+        "genre": genre,
+        "selling_points": [_safe_text(item) for item in _safe_list(outline_struct.get("selling_points")) if _safe_text(item)],
+        "story_positioning": _safe_text(outline_struct.get("story_positioning")),
+        "core_conflict": _safe_text(outline_struct.get("core_conflict")),
+        "target_total_words": _safe_int(outline_struct.get("target_total_words"), sum(v["target_words"] for v in volumes)),
+        "protagonist": {
+            "name": _safe_text(protagonist.get("name"), "待定"),
+            "background": _safe_text(protagonist.get("background"), "待补充"),
+            "golden_finger": _safe_text(protagonist.get("golden_finger"), "待补充"),
+            "motivation": _safe_text(protagonist.get("motivation"), "待补充"),
+            "realm": _safe_text(protagonist.get("realm"), "待定"),
+            "faction": _safe_text(protagonist.get("faction"), "待定"),
+            "personality": _safe_text(protagonist.get("personality"), "待补充"),
+        },
+        "core_cast": [
+            {
+                "name": _safe_text(item.get("name"), f"角色{idx}"),
+                "role": _safe_text(item.get("role"), "配角"),
+                "personality": _safe_text(item.get("personality"), "待补充"),
+                "background": _safe_text(item.get("background"), "待补充"),
+                "golden_finger": _safe_text(item.get("golden_finger"), "无"),
+                "motivation": _safe_text(item.get("motivation"), "待补充"),
+                "realm": _safe_text(item.get("realm"), "待定"),
+                "faction": _safe_text(item.get("faction"), "待定"),
+            }
+            for idx, item in enumerate(_safe_list(outline_struct.get("core_cast")), start=1)
+            if _safe_text(item.get("name"))
+        ],
+        "world_seed": {
+            "cultivation_system": _safe_list(world_seed.get("cultivation_system")),
+            "major_factions": _safe_list(world_seed.get("major_factions")),
+            "major_regions": _safe_list(world_seed.get("major_regions")),
+            "core_rules": _safe_list(world_seed.get("core_rules")),
+            "treasures": _safe_list(world_seed.get("treasures")),
+        },
+        "volumes": volumes,
+    }
+
+
+def _render_named_list(items: list[dict], name_key: str = "name", desc_key: str = "description") -> list[str]:
+    lines: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = _safe_text(item.get(name_key))
+        desc = _safe_text(item.get(desc_key))
+        if not name and not desc:
+            continue
+        if name and desc:
+            lines.append(f"- **{name}**：{desc}")
+        else:
+            lines.append(f"- {name or desc}")
+    return lines
+
+
+def _render_outline_markdown(title: str, synopsis: str, outline_struct: dict) -> str:
+    protagonist = outline_struct.get("protagonist") or {}
+    core_cast = outline_struct.get("core_cast") or []
+    world_seed = outline_struct.get("world_seed") or {}
+    selling_points = outline_struct.get("selling_points") or []
+    volumes = outline_struct.get("volumes") or []
+
+    parts = [f"# {title or '暂定书名'}", "", "## 简介", synopsis or "（待补充）", ""]
+
+    parts.append("## 核心卖点")
+    if selling_points:
+        parts.extend([f"- {item}" for item in selling_points])
+    else:
+        parts.append("（待补充）")
+    parts.append("")
+
+    parts.append("## 故事定位")
+    parts.append(f"- 类型：{outline_struct.get('genre') or '玄幻修仙'}")
+    parts.append(f"- 一句话定位：{outline_struct.get('story_positioning') or '待补充'}")
+    parts.append(f"- 核心冲突：{outline_struct.get('core_conflict') or '待补充'}")
+    parts.append(f"- 目标总字数：{outline_struct.get('target_total_words') or 0}")
+    parts.append("")
+
+    parts.append("## 主角设定")
+    parts.append(f"- 姓名：{protagonist.get('name') or '待定'}")
+    parts.append(f"- 出身背景：{protagonist.get('background') or '待补充'}")
+    parts.append(f"- 金手指：{protagonist.get('golden_finger') or '待补充'}")
+    parts.append(f"- 核心动机：{protagonist.get('motivation') or '待补充'}")
+    parts.append(f"- 当前境界：{protagonist.get('realm') or '待定'}")
+    parts.append(f"- 所属阵营：{protagonist.get('faction') or '待定'}")
+    parts.append(f"- 性格基调：{protagonist.get('personality') or '待补充'}")
+    parts.append("")
+
+    parts.append("## 核心角色")
+    if core_cast:
+        for item in core_cast:
+            parts.append(f"### {item.get('name') or '待定角色'}")
+            parts.append(f"- 定位：{item.get('role') or '配角'}")
+            parts.append(f"- 性格：{item.get('personality') or '待补充'}")
+            parts.append(f"- 背景：{item.get('background') or '待补充'}")
+            parts.append(f"- 金手指/特殊点：{item.get('golden_finger') or '无'}")
+            parts.append(f"- 动机：{item.get('motivation') or '待补充'}")
+            parts.append(f"- 境界：{item.get('realm') or '待定'}")
+            parts.append(f"- 阵营：{item.get('faction') or '待定'}")
+            parts.append("")
+    else:
+        parts.append("（待补充）")
+        parts.append("")
+
+    parts.append("## 世界观种子")
+    world_sections = [
+        ("修炼体系", _render_named_list(world_seed.get("cultivation_system") or [])),
+        ("主要势力", _render_named_list(world_seed.get("major_factions") or [], desc_key="description")),
+        ("主要地域", _render_named_list(world_seed.get("major_regions") or [])),
+        ("核心规则", _render_named_list(world_seed.get("core_rules") or [], name_key="rule_name", desc_key="description")),
+        ("关键宝物", _render_named_list(world_seed.get("treasures") or [])),
+    ]
+    for section_name, lines in world_sections:
+        parts.append(f"### {section_name}")
+        parts.extend(lines or ["（待补充）"])
+        parts.append("")
+
+    parts.append("## 分卷规划")
+    for item in volumes:
+        parts.append(f"### 第{item.get('volume_no', 0)}卷 {item.get('title') or '待定卷名'}")
+        parts.append(f"- 目标字数：{item.get('target_words') or 0}")
+        parts.append(f"- 预计章节数：{item.get('chapter_count') or 0}")
+        parts.append(f"- 本卷主线：{item.get('main_line') or '待补充'}")
+        parts.append(f"- 人物成长：{item.get('character_arc') or '待补充'}")
+        parts.append(f"- 卷末钩子：{item.get('ending_hook') or '待补充'}")
+        parts.append("")
+
+    return "\n".join(parts).strip()
+
+
+def _serialize_outline(outline: Outline) -> dict:
+    return OutlineOut.model_validate(outline).model_dump(mode="json")
+
+
+def _serialize_characters(characters: list[Character]) -> list[dict]:
+    return [CharacterOut.model_validate(item).model_dump(mode="json") for item in characters]
+
+
+def _serialize_worldbuilding(worldbuilding: Worldbuilding) -> dict:
+    return WorldbuildingOut.model_validate(
+        load_worldbuilding_document(worldbuilding.novel_id, worldbuilding)
+    ).model_dump(mode="json")
+
+
+def _serialize_synopsis(synopsis: Synopsis) -> dict:
+    return SynopsisOut.model_validate(synopsis).model_dump(mode="json")
+
+
+def _serialize_chapter(chapter: Chapter) -> dict:
+    return ChapterContentOut.model_validate(chapter).model_dump(mode="json")
+
+
+def _get_latest_outline(db: Session, novel_id: str, outline_id: str | None = None) -> Outline:
+    if outline_id:
+        outline = db.query(Outline).filter(Outline.id == outline_id, Outline.novel_id == novel_id).first()
+    else:
+        outline = db.query(Outline).filter(Outline.novel_id == novel_id).order_by(Outline.version.desc()).first()
+    if not outline:
+        raise HTTPException(400, "请先生成并保存大纲")
+    return outline
+
+
+def _load_outline_struct(outline: Outline | None) -> dict:
+    if not outline or not outline.main_plot:
+        return {}
+    try:
+        return json.loads(outline.main_plot)
+    except Exception:
+        return {}
+
+
+def _create_missing_characters(db: Session, novel_id: str, names: list[str]) -> list[str]:
+    created: list[str] = []
+    for name in names:
+        clean_name = _safe_text(name)
+        if not clean_name:
+            continue
+        exists = db.query(Character).filter(
+            Character.novel_id == novel_id,
+            Character.name == clean_name,
+        ).first()
+        if exists:
+            continue
+        char = Character(
+            novel_id=novel_id,
+            name=clean_name,
+            role="配角",
+            personality="待补充",
+            background="由 AI 细纲自动补录，待完善。",
+            status="alive",
+        )
+        db.add(char)
+        created.append(clean_name)
+    return created
+
+
+def _ensure_volume_chapters(db: Session, novel_id: str, volume: Volume) -> list[Chapter]:
+    chapters = db.query(Chapter).filter(Chapter.volume_id == volume.id).order_by(Chapter.chapter_number).all()
+    outline = db.query(Outline).filter(
+        Outline.novel_id == novel_id,
+        Outline.confirmed == True,
+    ).order_by(Outline.version.desc()).first()
+    outline_struct = _load_outline_struct(outline)
+    volume_spec = next(
+        (
+            item for item in (outline_struct.get("volumes") or [])
+            if _safe_int(item.get("volume_no"), 0) == volume.volume_number
+        ),
+        None,
+    )
+    target_count = max(_safe_int((volume_spec or {}).get("chapter_count"), len(chapters) or 0), len(chapters), 1)
+    if len(chapters) >= target_count:
+        return chapters
+
+    max_number = db.query(Chapter.chapter_number).filter(Chapter.novel_id == novel_id).order_by(Chapter.chapter_number.desc()).first()
+    next_number = _safe_int(max_number[0] if max_number else 0, 0) + 1
+    missing_count = target_count - len(chapters)
+    for index in range(missing_count):
+        chapter_number = next_number + index
+        chapter = Chapter(
+            novel_id=novel_id,
+            volume_id=volume.id,
+            chapter_number=chapter_number,
+            title=f"第{chapter_number}章",
+            status="draft",
+        )
+        db.add(chapter)
+        chapters.append(chapter)
+
+    db.commit()
+    return db.query(Chapter).filter(Chapter.volume_id == volume.id).order_by(Chapter.chapter_number).all()
+
+
+def _combine_segment_content(base_content: str, segment: str, generated_text: str) -> str:
+    if segment == "opening":
+        return generated_text.strip()
+    if not base_content.strip():
+        return generated_text.strip()
+    return f"{base_content.rstrip()}\n\n{generated_text.strip()}".strip()
+
+
+def _persist_segment_partial(chapter_id: str, segment: str, base_content: str, generated_text: str):
+    db = SessionLocal()
+    try:
+        chapter = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+        if not chapter:
+            return
+        merged = _combine_segment_content(base_content, segment, generated_text)
+        chapter.content = merged
+        chapter.word_count = len(merged)
+        if chapter.status == "draft":
+            chapter.status = "writing"
+        db.commit()
+        save_chapter_content(chapter.novel_id, chapter.chapter_number, merged)
+    finally:
+        db.close()
+
+
+def _persist_full_chapter_partial(chapter_id: str, generated_text: str):
+    db = SessionLocal()
+    try:
+        chapter = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+        if not chapter:
+            return
+        chapter.content = generated_text
+        chapter.word_count = len(generated_text)
+        if chapter.status == "draft":
+            chapter.status = "writing"
+        db.commit()
+        save_chapter_content(chapter.novel_id, chapter.chapter_number, generated_text)
+    finally:
+        db.close()
+
+
+async def _execute_outline_job(db: Session, payload: dict, job_id: str) -> dict:
+    novel = db.query(Novel).filter(Novel.id == payload["novel_id"]).first()
     if not novel:
         raise HTTPException(404, "小说不存在")
 
-    prompt = f"""请根据以下想法，为这部小说生成一个极简且结构化的企划。
-想法：{req.idea}
+    prompt_cfg = _prompt_config()
+    prompt = f"""{prompt_cfg['outline_generation']}
 
-你必须严格按照以下 JSON 格式输出，不要输出任何额外的废话：
+想法：{payload['idea']}
+类型：{novel.genre}
+
+你必须严格输出 JSON（不要解释）：
 ```json
 {{
-  "title": "小说的书名（提供1个最合适的）",
-  "synopsis": "商业简介（200字以内，吸引读者）",
-  "selling_points": "核心卖点/金手指/爽点（100字以内概括）",
-  "main_plot": "极简主线大纲（按起承转合四个阶段概括，共计1000字左右）"
+  "title_draft": "暂定书名",
+  "book_synopsis_draft": "100-180字的读者向简介草稿",
+  "outline_struct": {{
+    "selling_points": [
+      "卖点1（读者爽点）",
+      "卖点2（冲突/反转）",
+      "卖点3（差异化）"
+    ],
+    "story_positioning": "一句话定位（谁在什么世界完成什么目标）",
+    "core_conflict": "主角长期冲突与终局对手",
+    "target_total_words": 180000,
+    "protagonist": {{
+      "name": "主角名",
+      "background": "主角出身与起点",
+      "golden_finger": "主角的核心外挂/机缘",
+      "motivation": "主角最核心的执念",
+      "realm": "开局境界",
+      "faction": "当前阵营/宗门",
+      "personality": "性格基调"
+    }},
+    "core_cast": [
+      {{
+        "name": "角色名",
+        "role": "主角/女主/反派/导师/配角",
+        "personality": "性格特征",
+        "background": "背景与立场",
+        "golden_finger": "特殊能力，没有填无",
+        "motivation": "核心动机",
+        "realm": "大致境界",
+        "faction": "所属阵营"
+      }}
+    ],
+    "world_seed": {{
+      "cultivation_system": [
+        {{"name": "境界名", "description": "该境界的关键特征"}}
+      ],
+      "major_factions": [
+        {{"name": "势力名", "description": "势力定位与作用"}}
+      ],
+      "major_regions": [
+        {{"name": "地域名", "description": "地域特色与功能"}}
+      ],
+      "core_rules": [
+        {{"rule_name": "规则名", "description": "规则限制与影响"}}
+      ],
+      "treasures": [
+        {{"name": "宝物/资源名", "description": "作用与稀缺性"}}
+      ]
+    }},
+    "volumes": [
+      {{
+        "volume_no": 1,
+        "title": "卷名",
+        "target_words": 30000,
+        "chapter_count": 12,
+        "main_line": "本卷主线目标",
+        "character_arc": "本卷人物成长/关系变化",
+        "ending_hook": "卷末留下的悬念"
+      }}
+    ]
+  }}
 }}
 ```"""
 
-    try:
-        response_text = await ai_service.generate(SYSTEM_NOVEL, prompt)
-        json_str = _extract_json(response_text)
-        data = json.loads(json_str)
-        
-        last = db.query(Outline).filter(Outline.novel_id == req.novel_id).order_by(Outline.version.desc()).first()
-        version = (last.version + 1) if last else 1
-        
-        outline = Outline(
-            novel_id=req.novel_id,
-            title=data.get("title", ""),
-            synopsis=data.get("synopsis", ""),
-            selling_points=data.get("selling_points", ""),
-            main_plot=data.get("main_plot", ""),
-            content=json_str, # 保留完整内容以兼容
-            ai_generated=True,
-            confirmed=False,
-            version=version,
-        )
-        db.add(outline)
-        novel.idea = req.idea
-        novel.title = data.get("title", novel.title)
-        novel.synopsis = data.get("synopsis", novel.synopsis)
-        db.commit()
-        db.refresh(outline)
-        return outline
-    except Exception as e:
-        raise HTTPException(500, f"AI生成失败或格式错误: {str(e)}")
+    response_text = await ai_job_service.collect_text(
+        job_id=job_id,
+        system_prompt=prompt_cfg["global_system"],
+        user_prompt=prompt,
+        progress_message="AI 正在推演大纲结构，请稍候...",
+    )
+    data = json.loads(_extract_json(response_text))
+    outline_struct = _normalize_outline_struct(data, novel.genre)
+    title_draft = _safe_text(data.get("title_draft"), novel.title or "暂定书名")
+    synopsis_draft = _safe_text(data.get("book_synopsis_draft"), "（待补充）")
+    selling_points_text = "\n".join([f"- {item}" for item in (outline_struct.get("selling_points") or [])])
+    content_md = _render_outline_markdown(title_draft, synopsis_draft, outline_struct)
+
+    last = db.query(Outline).filter(Outline.novel_id == payload["novel_id"]).order_by(Outline.version.desc()).first()
+    version = (last.version + 1) if last else 1
+
+    outline = Outline(
+        novel_id=payload["novel_id"],
+        title=title_draft,
+        synopsis=synopsis_draft,
+        selling_points=selling_points_text,
+        main_plot=json.dumps(outline_struct, ensure_ascii=False),
+        content=content_md,
+        ai_generated=True,
+        confirmed=False,
+        version=version,
+    )
+    db.add(outline)
+    novel.idea = payload["idea"]
+    db.commit()
+    db.refresh(outline)
+    return _serialize_outline(outline)
 
 
-@router.post("/generate/titles")
-async def generate_titles(req: GenerateTitlesRequest, db: Session = Depends(get_db)):
-    """生成10个候选书名（JSON数组）"""
-    novel = db.query(Novel).filter(Novel.id == req.novel_id).first()
+async def _execute_titles_job(db: Session, payload: dict, job_id: str) -> dict:
+    novel = db.query(Novel).filter(Novel.id == payload["novel_id"]).first()
     if not novel:
         raise HTTPException(404, "小说不存在")
 
     outline = db.query(Outline).filter(
-        Outline.novel_id == req.novel_id, Outline.confirmed == True
+        Outline.novel_id == payload["novel_id"],
+        Outline.confirmed == True,
     ).order_by(Outline.version.desc()).first()
     if not outline or not outline.content:
         raise HTTPException(400, "请先确认大纲")
@@ -141,35 +535,29 @@ async def generate_titles(req: GenerateTitlesRequest, db: Session = Depends(get_
 3. 风格偏网文，辨识度高，避免雷同
 4. 不要输出任何额外说明
 """
-    if req.extra_instruction:
-        prompt += f"\n额外要求：{req.extra_instruction}\n"
+    if payload.get("extra_instruction"):
+        prompt += f"\n额外要求：{payload['extra_instruction']}\n"
 
-    full_text = ""
-    async for chunk in ai_service.stream_generate(prompt_cfg["global_system"], prompt):
-        full_text += chunk
-
-    try:
-        raw_json = _extract_json(full_text)
-        titles = json.loads(raw_json)
-        if not isinstance(titles, list):
-            raise ValueError("标题结果格式错误")
-        titles = [str(t).strip() for t in titles if str(t).strip()]
-        if len(titles) > 10:
-            titles = titles[:10]
-        return {"titles": titles}
-    except Exception as e:
-        raise HTTPException(500, f"标题生成解析失败：{e}")
+    full_text = await ai_job_service.collect_text(
+        job_id=job_id,
+        system_prompt=prompt_cfg["global_system"],
+        user_prompt=prompt,
+        progress_message="AI 正在生成标题候选...",
+    )
+    titles = json.loads(_extract_json(full_text))
+    if not isinstance(titles, list):
+        raise ValueError("标题结果格式错误")
+    return {"titles": [str(t).strip() for t in titles if str(t).strip()][:10]}
 
 
-@router.post("/generate/book-synopsis")
-async def generate_book_synopsis(req: GenerateBookSynopsisRequest, db: Session = Depends(get_db)):
-    """生成小说简介并保存到数据库/文件"""
-    novel = db.query(Novel).filter(Novel.id == req.novel_id).first()
+async def _execute_book_synopsis_job(db: Session, payload: dict, job_id: str) -> dict:
+    novel = db.query(Novel).filter(Novel.id == payload["novel_id"]).first()
     if not novel:
         raise HTTPException(404, "小说不存在")
 
     outline = db.query(Outline).filter(
-        Outline.novel_id == req.novel_id, Outline.confirmed == True
+        Outline.novel_id == payload["novel_id"],
+        Outline.confirmed == True,
     ).order_by(Outline.version.desc()).first()
     if not outline or not outline.content:
         raise HTTPException(400, "请先确认大纲")
@@ -188,120 +576,138 @@ async def generate_book_synopsis(req: GenerateBookSynopsisRequest, db: Session =
 3. 读者导向，适合详情页展示
 4. 仅输出简介正文，不要加标题和说明
 """
-    if req.extra_instruction:
-        prompt += f"\n额外要求：{req.extra_instruction}\n"
+    if payload.get("extra_instruction"):
+        prompt += f"\n额外要求：{payload['extra_instruction']}\n"
 
-    full_text = ""
-    async for chunk in ai_service.stream_generate(prompt_cfg["global_system"], prompt):
-        full_text += chunk
-
+    full_text = await ai_job_service.collect_text(
+        job_id=job_id,
+        system_prompt=prompt_cfg["global_system"],
+        user_prompt=prompt,
+        progress_message="AI 正在生成简介...",
+    )
     synopsis = full_text.strip()
     novel.synopsis = synopsis
     db.commit()
-    save_synopsis(req.novel_id, synopsis)
-    save_book_meta(req.novel_id, novel.title, synopsis)
+    save_synopsis(payload["novel_id"], synopsis)
+    save_book_meta(payload["novel_id"], novel.title, synopsis)
     return {"synopsis": synopsis}
 
 
-@router.post("/generate/synopsis")
-async def generate_synopsis(req: GenerateSynopsisRequest, db: Session = Depends(get_db)):
-    """生成单章细纲并保存到数据库"""
-    prompt = context_builder.build_synopsis_context(db, req.novel_id, req.chapter_number)
-    if req.extra_instruction:
-        prompt += f"\n\n额外要求：{req.extra_instruction}"
+async def _execute_chapter_synopsis_job(db: Session, payload: dict, job_id: str) -> dict:
+    prompt = context_builder.build_synopsis_context(db, payload["novel_id"], payload["chapter_number"])
+    if payload.get("extra_instruction"):
+        prompt += f"\n\n额外要求：{payload['extra_instruction']}"
 
-    full_text = await ai_service.generate(SYSTEM_NOVEL, prompt)
-    raw_json = _extract_json(full_text)
-    try:
-        data = json.loads(raw_json)
-        
-        chapter = db.query(Chapter).filter(Chapter.id == req.chapter_id).first()
-        if not chapter:
-            raise HTTPException(404, "章节不存在")
-        
-        if data.get("title"):
-            chapter.title = data.get("title")
-
-        opening = data.get("opening", {})
-        development = data.get("development", {})
-        ending = data.get("ending", {})
-        all_chars = list(set(
-            opening.get("characters", []) +
-            development.get("characters", [])
-        ))
-
-        synopsis = db.query(Synopsis).filter(Synopsis.chapter_id == req.chapter_id).first()
-        if synopsis:
-            synopsis.opening_scene = opening.get("scene", "")
-            synopsis.opening_mood = opening.get("mood", "")
-            synopsis.opening_hook = opening.get("hook", "")
-            synopsis.opening_characters = opening.get("characters", [])
-            synopsis.development_events = development.get("events", [])
-            synopsis.development_conflicts = development.get("conflicts", [])
-            synopsis.development_characters = development.get("characters", [])
-            synopsis.ending_resolution = ending.get("resolution", "")
-            synopsis.ending_cliffhanger = ending.get("cliffhanger", "")
-            synopsis.ending_next_hook = ending.get("next_chapter_hook", "")
-            synopsis.all_characters = all_chars
-            synopsis.word_count_target = data.get("word_count_target", 3000)
-            synopsis.plot_summary_update = data.get("plot_summary_update", "")
-        else:
-            synopsis = Synopsis(
-                chapter_id=req.chapter_id,
-                novel_id=req.novel_id,
-                opening_scene=opening.get("scene", ""),
-                opening_mood=opening.get("mood", ""),
-                opening_hook=opening.get("hook", ""),
-                opening_characters=opening.get("characters", []),
-                development_events=development.get("events", []),
-                development_conflicts=development.get("conflicts", []),
-                development_characters=development.get("characters", []),
-                ending_resolution=ending.get("resolution", ""),
-                ending_cliffhanger=ending.get("cliffhanger", ""),
-                ending_next_hook=ending.get("next_chapter_hook", ""),
-                all_characters=all_chars,
-                word_count_target=data.get("word_count_target", 3000),
-                plot_summary_update=data.get("plot_summary_update", ""),
-            )
-            db.add(synopsis)
-        db.commit()
-        return {"status": "ok"}
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(500, f"解析或保存细纲失败: {str(e)}\n原始内容: {full_text}")
-
-
-@router.post("/generate/chapter")
-async def generate_chapter(req: GenerateChapterRequest, db: Session = Depends(get_db)):
-    """流式生成完整正文（旧接口保留兼容）"""
-    prompt = context_builder.build_chapter_context(db, req.novel_id, req.chapter_id)
-    if req.extra_instruction:
-        prompt += f"\n\n额外要求：{req.extra_instruction}"
-
-    return StreamingResponse(
-        _sse_stream(ai_service.stream_generate(SYSTEM_NOVEL, prompt)),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    full_text = await ai_job_service.collect_text(
+        job_id=job_id,
+        system_prompt=SYSTEM_NOVEL,
+        user_prompt=prompt,
+        progress_message="AI 正在生成章节细纲...",
     )
+    data = json.loads(_extract_json(full_text))
+
+    chapter = db.query(Chapter).filter(Chapter.id == payload["chapter_id"]).first()
+    if not chapter:
+        raise HTTPException(404, "章节不存在")
+
+    if data.get("title"):
+        chapter.title = data.get("title")
+
+    opening = data.get("opening", {})
+    development = data.get("development", {})
+    ending = data.get("ending", {})
+    all_chars = list(set(opening.get("characters", []) + development.get("characters", [])))
+
+    validation = validate_synopsis_characters(db, payload["novel_id"], all_chars)
+    auto_created: list[str] = []
+    if not validation["valid"]:
+        auto_created = _create_missing_characters(db, payload["novel_id"], validation["missing"])
+        db.commit()
+
+    synopsis = db.query(Synopsis).filter(Synopsis.chapter_id == payload["chapter_id"]).first()
+    if not synopsis:
+        synopsis = Synopsis(chapter_id=payload["chapter_id"], novel_id=payload["novel_id"])
+        db.add(synopsis)
+
+    synopsis.opening_scene = opening.get("scene", "")
+    synopsis.opening_mood = opening.get("mood", "")
+    synopsis.opening_hook = opening.get("hook", "")
+    synopsis.opening_characters = opening.get("characters", [])
+    synopsis.development_events = development.get("events", [])
+    synopsis.development_conflicts = development.get("conflicts", [])
+    synopsis.development_characters = development.get("characters", [])
+    synopsis.ending_resolution = ending.get("resolution", "")
+    synopsis.ending_cliffhanger = ending.get("cliffhanger", "")
+    synopsis.ending_next_hook = ending.get("next_chapter_hook", "")
+    synopsis.all_characters = all_chars
+    synopsis.word_count_target = data.get("word_count_target", 3000)
+    synopsis.plot_summary_update = data.get("plot_summary_update", "")
+    db.commit()
+    db.refresh(synopsis)
+    save_chapter_synopsis(payload["novel_id"], chapter.chapter_number, _serialize_synopsis(synopsis))
+    if auto_created:
+        all_characters = db.query(Character).filter(Character.novel_id == payload["novel_id"]).all()
+        save_characters(payload["novel_id"], _serialize_characters(all_characters))
+    return {"status": "ok", "auto_created_characters": auto_created}
 
 
-@router.post("/generate/volume-synopsis")
-async def generate_volume_synopsis(req: GenerateVolumeSynopsisRequest, db: Session = Depends(get_db)):
-    """生成整卷所有章节细纲（JSON数组），并保存到数据库"""
-    volume = db.query(Volume).filter(Volume.id == req.volume_id, Volume.novel_id == req.novel_id).first()
+async def _execute_full_chapter_job(db: Session, payload: dict, job_id: str) -> dict:
+    chapter = db.query(Chapter).filter(Chapter.id == payload["chapter_id"], Chapter.novel_id == payload["novel_id"]).first()
+    if not chapter:
+        raise HTTPException(404, "章节不存在")
+
+    prompt = context_builder.build_chapter_context(db, payload["novel_id"], payload["chapter_id"])
+    if payload.get("extra_instruction"):
+        prompt += f"\n\n额外要求：{payload['extra_instruction']}"
+
+    text = await ai_job_service.collect_text(
+        job_id=job_id,
+        system_prompt=SYSTEM_NOVEL,
+        user_prompt=prompt,
+        progress_message="AI 正在生成正文...",
+        on_partial=lambda current: _persist_full_chapter_partial(payload["chapter_id"], current),
+    )
+    chapter.content = text
+    chapter.word_count = len(text)
+    if chapter.status == "draft":
+        chapter.status = "writing"
+    db.commit()
+    db.refresh(chapter)
+    save_chapter_content(payload["novel_id"], chapter.chapter_number, text)
+    return _serialize_chapter(chapter)
+
+
+async def _execute_volume_synopsis_job(db: Session, payload: dict, job_id: str) -> dict:
+    volume = db.query(Volume).filter(
+        Volume.id == payload["volume_id"],
+        Volume.novel_id == payload["novel_id"],
+    ).first()
     if not volume:
         raise HTTPException(404, "卷不存在")
 
-    prompt = context_builder.build_volume_synopsis_context(db, req.novel_id, req.volume_id)
-    if req.extra_instruction:
-        prompt += f"\n\n额外要求：{req.extra_instruction}"
+    chapters = _ensure_volume_chapters(db, payload["novel_id"], volume)
+    ch_map = {c.chapter_number: c for c in chapters}
+    auto_created_characters: list[str] = []
+    batch_size = 8
 
-    full_text = await ai_service.generate(SYSTEM_NOVEL, prompt)
-    try:
-        raw_json = _extract_json(full_text)
-        synopsis_list = json.loads(raw_json)
-        chapters = db.query(Chapter).filter(Chapter.volume_id == req.volume_id).order_by(Chapter.chapter_number).all()
-        ch_map = {c.chapter_number: c for c in chapters}
+    for start in range(0, len(chapters), batch_size):
+        batch = chapters[start:start + batch_size]
+        prompt = context_builder.build_volume_synopsis_context(
+            db,
+            payload["novel_id"],
+            payload["volume_id"],
+            chapter_numbers=[chapter.chapter_number for chapter in batch],
+        )
+        if payload.get("extra_instruction"):
+            prompt += f"\n\n额外要求：{payload['extra_instruction']}"
+
+        full_text = await ai_job_service.collect_text(
+            job_id=job_id,
+            system_prompt=SYSTEM_NOVEL,
+            user_prompt=prompt,
+            progress_message=f"AI 正在生成本卷细纲（第{start + 1}-{start + len(batch)}章 / 共{len(chapters)}章）...",
+        )
+        synopsis_list = json.loads(_extract_json(full_text))
 
         for item in synopsis_list:
             ch_num = item.get("chapter_number")
@@ -311,73 +717,58 @@ async def generate_volume_synopsis(req: GenerateVolumeSynopsisRequest, db: Sessi
             opening = item.get("opening", {})
             development = item.get("development", {})
             ending = item.get("ending", {})
-            all_chars = list(set(
-                opening.get("characters", []) +
-                development.get("characters", [])
-            ))
+            all_chars = list(set(opening.get("characters", []) + development.get("characters", [])))
+            validation = validate_synopsis_characters(db, payload["novel_id"], all_chars)
+            if not validation["valid"]:
+                auto_created_characters.extend(_create_missing_characters(db, payload["novel_id"], validation["missing"]))
 
             existing = db.query(Synopsis).filter(Synopsis.chapter_id == ch.id).first()
-            if existing:
-                existing.opening_scene = opening.get("scene", "")
-                existing.opening_mood = opening.get("mood", "")
-                existing.opening_hook = opening.get("hook", "")
-                existing.opening_characters = opening.get("characters", [])
-                existing.development_events = development.get("events", [])
-                existing.development_conflicts = development.get("conflicts", [])
-                existing.development_characters = development.get("characters", [])
-                existing.ending_resolution = ending.get("resolution", "")
-                existing.ending_cliffhanger = ending.get("cliffhanger", "")
-                existing.ending_next_hook = ending.get("next_chapter_hook", "")
-                existing.all_characters = all_chars
-                existing.word_count_target = item.get("word_count_target", 3000)
-                existing.plot_summary_update = item.get("plot_summary_update", "")
-            else:
-                s = Synopsis(
-                    chapter_id=ch.id,
-                    novel_id=req.novel_id,
-                    opening_scene=opening.get("scene", ""),
-                    opening_mood=opening.get("mood", ""),
-                    opening_hook=opening.get("hook", ""),
-                    opening_characters=opening.get("characters", []),
-                    development_events=development.get("events", []),
-                    development_conflicts=development.get("conflicts", []),
-                    development_characters=development.get("characters", []),
-                    ending_resolution=ending.get("resolution", ""),
-                    ending_cliffhanger=ending.get("cliffhanger", ""),
-                    ending_next_hook=ending.get("next_chapter_hook", ""),
-                    all_characters=all_chars,
-                    word_count_target=item.get("word_count_target", 3000),
-                    plot_summary_update=item.get("plot_summary_update", ""),
-                )
-                db.add(s)
+            if not existing:
+                existing = Synopsis(chapter_id=ch.id, novel_id=payload["novel_id"])
+                db.add(existing)
 
-            # 更新章节标题
+            existing.opening_scene = opening.get("scene", "")
+            existing.opening_mood = opening.get("mood", "")
+            existing.opening_hook = opening.get("hook", "")
+            existing.opening_characters = opening.get("characters", [])
+            existing.development_events = development.get("events", [])
+            existing.development_conflicts = development.get("conflicts", [])
+            existing.development_characters = development.get("characters", [])
+            existing.ending_resolution = ending.get("resolution", "")
+            existing.ending_cliffhanger = ending.get("cliffhanger", "")
+            existing.ending_next_hook = ending.get("next_chapter_hook", "")
+            existing.all_characters = all_chars
+            existing.word_count_target = item.get("word_count_target", 3000)
+            existing.plot_summary_update = item.get("plot_summary_update", "")
             if item.get("title"):
                 ch.title = item["title"]
 
-        volume.synopsis_generated = True
         db.commit()
-        return {"status": "ok"}
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(500, f"解析或保存卷细纲失败: {str(e)}\n原始内容: {full_text}")
+
+    volume.synopsis_generated = True
+    db.commit()
+
+    refreshed_chapters = db.query(Chapter).filter(Chapter.volume_id == payload["volume_id"]).order_by(Chapter.chapter_number).all()
+    for ch in refreshed_chapters:
+        synopsis = db.query(Synopsis).filter(Synopsis.chapter_id == ch.id).first()
+        if synopsis:
+            save_chapter_synopsis(payload["novel_id"], ch.chapter_number, _serialize_synopsis(synopsis))
+    if auto_created_characters:
+        all_characters = db.query(Character).filter(Character.novel_id == payload["novel_id"]).all()
+        save_characters(payload["novel_id"], _serialize_characters(all_characters))
+    return {
+        "status": "ok",
+        "chapter_count": len(refreshed_chapters),
+        "auto_created_characters": sorted(set(auto_created_characters)),
+    }
 
 
-@router.post("/generate/characters")
-async def generate_characters(req: GenerateCharactersFromOutlineRequest, db: Session = Depends(get_db)):
-    """根据大纲提取和生成核心角色"""
-    novel = db.query(Novel).filter(Novel.id == req.novel_id).first()
+async def _execute_characters_job(db: Session, payload: dict, job_id: str) -> dict:
+    novel = db.query(Novel).filter(Novel.id == payload["novel_id"]).first()
     if not novel:
         raise HTTPException(404, "小说不存在")
-        
-    if req.outline_id:
-        outline = db.query(Outline).filter(Outline.id == req.outline_id).first()
-    else:
-        outline = db.query(Outline).filter(Outline.novel_id == req.novel_id).order_by(Outline.version.desc()).first()
-        
-    if not outline:
-        raise HTTPException(400, "请先生成并保存大纲")
 
+    outline = _get_latest_outline(db, payload["novel_id"], payload.get("outline_id"))
     prompt = f"""你是一个资深网文架构师。请仔细阅读以下小说大纲：
 
 【书名】：{outline.title or novel.title}
@@ -401,58 +792,54 @@ async def generate_characters(req: GenerateCharactersFromOutlineRequest, db: Ses
 ]
 ```"""
 
-    try:
-        response_text = await ai_service.generate(SYSTEM_NOVEL, prompt)
-        json_str = _extract_json(response_text)
-        data = json.loads(json_str)
-        
-        created_characters = []
-        for char_data in data:
-            # 检查角色是否已存在（简单按名字去重）
-            existing = db.query(Character).filter(
-                Character.novel_id == req.novel_id,
-                Character.name == char_data.get("name")
-            ).first()
-            
-            if not existing:
-                char = Character(
-                    novel_id=req.novel_id,
-                    name=char_data.get("name"),
-                    role=char_data.get("role", "配角"),
-                    personality=char_data.get("personality"),
-                    appearance=char_data.get("appearance"),
-                    background=char_data.get("background"),
-                    golden_finger=char_data.get("golden_finger"),
-                    motivation=char_data.get("motivation"),
-                )
-                db.add(char)
-                created_characters.append(char)
-                
-        db.commit()
-        for char in created_characters:
-            db.refresh(char)
-            
-        return created_characters
-    except Exception as e:
-        raise HTTPException(500, f"AI生成角色失败或格式错误: {str(e)}")
+    response_text = await ai_job_service.collect_text(
+        job_id=job_id,
+        system_prompt=SYSTEM_NOVEL,
+        user_prompt=prompt,
+        progress_message="AI 正在提取核心角色...",
+    )
+    data = json.loads(_extract_json(response_text))
+
+    created_characters = []
+    for char_data in data:
+        existing = db.query(Character).filter(
+            Character.novel_id == payload["novel_id"],
+            Character.name == char_data.get("name"),
+        ).first()
+        if existing:
+            continue
+        char = Character(
+            novel_id=payload["novel_id"],
+            name=char_data.get("name"),
+            role=char_data.get("role", "配角"),
+            personality=char_data.get("personality"),
+            appearance=char_data.get("appearance"),
+            background=char_data.get("background"),
+            golden_finger=char_data.get("golden_finger"),
+            motivation=char_data.get("motivation"),
+        )
+        db.add(char)
+        created_characters.append(char)
+
+    db.commit()
+    for char in created_characters:
+        db.refresh(char)
+    all_characters = db.query(Character).filter(Character.novel_id == payload["novel_id"]).all()
+    save_characters(payload["novel_id"], _serialize_characters(all_characters))
+    return {"characters": _serialize_characters(created_characters)}
 
 
-@router.post("/generate/worldbuilding")
-async def generate_worldbuilding(req: GenerateWorldbuildingRequest, db: Session = Depends(get_db)):
-    """根据大纲结构化生成世界观"""
-    novel = db.query(Novel).filter(Novel.id == req.novel_id).first()
+async def _execute_worldbuilding_job(db: Session, payload: dict, job_id: str) -> dict:
+    novel = db.query(Novel).filter(Novel.id == payload["novel_id"]).first()
     if not novel:
         raise HTTPException(404, "小说不存在")
-        
-    if req.outline_id:
-        outline = db.query(Outline).filter(Outline.id == req.outline_id).first()
-    else:
-        outline = db.query(Outline).filter(Outline.novel_id == req.novel_id).order_by(Outline.version.desc()).first()
-        
-    if not outline:
-        raise HTTPException(400, "请先生成并保存大纲")
 
-    prompt = f"""你是一个资深网文架构师。请仔细阅读以下小说大纲：
+    outline = _get_latest_outline(db, payload["novel_id"], payload.get("outline_id"))
+    current_worldbuilding = normalize_worldbuilding_document(
+        payload.get("current_worldbuilding") or load_worldbuilding_document(payload["novel_id"], db.query(Worldbuilding).filter(Worldbuilding.novel_id == payload["novel_id"]).first()),
+        novel_id=payload["novel_id"],
+    )
+    prompt = f"""你是一位擅长长篇玄幻修仙项目的设定编辑。请仔细阅读以下小说信息，并输出一份可持续维护的世界设定文件。
 
 【书名】：{outline.title or novel.title}
 【简介】：{outline.synopsis or novel.synopsis}
@@ -460,92 +847,382 @@ async def generate_worldbuilding(req: GenerateWorldbuildingRequest, db: Session 
 【主线大纲】：
 {outline.main_plot or outline.content}
 
-请根据大纲的背景和基调，为这部小说推演世界观设定。你必须严格按照以下 JSON 格式输出，不要输出任何额外的废话：
+【当前世界观（如果有，请优先保留栏目结构并在此基础上补全）】：
+{json.dumps(current_worldbuilding, ensure_ascii=False, indent=2)}
+
+设计要求：
+1. 这不是固定表单，栏目可以自由增删，但要围绕长篇写作真正会反复引用的设定来组织。
+2. 如果故事明显涉及修炼、势力、地域、规则、关键物品，优先保留或补齐这些栏目。
+3. 如果用户已经写了自定义栏目或 generation_hint，必须优先保留并补全，不要随意删掉。
+4. 每个栏目下的 entries 只写对后续大纲、细纲、正文有帮助的内容，不要空泛凑字。
+5. 可以新增例如“血脉体系”“宗门戒律”“秘境生态”“历史谜团”“禁忌”“职业体系”等自定义栏目。
+
+你必须严格按照以下 JSON 格式输出，不要输出任何额外的废话：
 ```json
 {{
-  "power_system": [
-    {{"name": "境界/能力名称（如：炼气期）", "description": "特征描述（寿命、能力表现）"}}
-  ],
-  "factions": [
-    {{"name": "势力名称（如：三大宗门）", "type": "类型（宗门/公司/国家）", "description": "宗旨与实力"}}
-  ],
-  "geography": [
-    {{"name": "地点名称（如：十万大山）", "description": "地貌与特色"}}
-  ],
-  "core_rules": [
-    {{"rule_name": "核心法则（如：灵气衰竭）", "description": "具体表现与限制"}}
-  ],
-  "items": [
-    {{"name": "关键物品（如：某种异火）", "description": "作用与稀有度"}}
+  "overview": "80-180字的世界总述，说明这个世界最核心的运行逻辑与戏剧张力",
+  "sections": [
+    {{
+      "id": "power_system",
+      "name": "力量/境界体系",
+      "description": "这个栏目回答什么问题",
+      "generation_hint": "若用户已有提示，请沿用；没有可留空",
+      "entries": [
+        {{
+          "name": "设定名",
+          "summary": "一句话定义",
+          "details": "补充限制、代价、与剧情关系",
+          "tags": ["可选标签"],
+          "attributes": {{"type": "可选扩展字段"}}
+        }}
+      ]
+    }}
   ]
 }}
 ```"""
+    if payload.get("extra_instruction"):
+        prompt += f"\n\n额外要求：{payload['extra_instruction']}"
 
-    try:
-        response_text = await ai_service.generate(SYSTEM_NOVEL, prompt)
-        json_str = _extract_json(response_text)
-        data = json.loads(json_str)
-        
-        # 保存到数据库
-        wb = db.query(Worldbuilding).filter(Worldbuilding.novel_id == req.novel_id).first()
-        if not wb:
-            wb = Worldbuilding(novel_id=req.novel_id)
-            db.add(wb)
-            
-        wb.power_system = data.get("power_system", [])
-        wb.factions = data.get("factions", [])
-        wb.geography = data.get("geography", [])
-        wb.core_rules = data.get("core_rules", [])
-        wb.items = data.get("items", [])
-        
-        db.commit()
-        db.refresh(wb)
-        
-        return wb
-    except Exception as e:
-        raise HTTPException(500, f"AI生成世界观失败或格式错误: {str(e)}")
+    response_text = await ai_job_service.collect_text(
+        job_id=job_id,
+        system_prompt=SYSTEM_NOVEL,
+        user_prompt=prompt,
+        progress_message="AI 正在推演世界观...",
+    )
+    data = json.loads(_extract_json(response_text))
+
+    wb = db.query(Worldbuilding).filter(Worldbuilding.novel_id == payload["novel_id"]).first()
+    if not wb:
+        wb = Worldbuilding(novel_id=payload["novel_id"])
+        db.add(wb)
+
+    merged = merge_worldbuilding_documents(current_worldbuilding, data)
+    apply_worldbuilding_document(wb, merged)
+    db.commit()
+    db.refresh(wb)
+
+    serialized = _serialize_worldbuilding(wb)
+    save_worldbuilding(payload["novel_id"], serialized)
+    return serialized
 
 
-@router.post("/generate/chapter-segment")
-async def generate_chapter_segment(req: GenerateChapterSegmentRequest, db: Session = Depends(get_db)):
-    """流式分段生成正文（opening/middle/ending）"""
-    if req.segment not in ("opening", "middle", "ending"):
+async def _execute_chapter_segment_job(db: Session, payload: dict, job_id: str) -> dict:
+    segment = payload["segment"]
+    if segment not in ("opening", "middle", "ending"):
         raise HTTPException(400, "segment 必须是 opening/middle/ending")
 
+    chapter = db.query(Chapter).filter(
+        Chapter.id == payload["chapter_id"],
+        Chapter.novel_id == payload["novel_id"],
+    ).first()
+    if not chapter:
+        raise HTTPException(404, "章节不存在")
+
+    base_content = chapter.content or ""
     prompt = context_builder.build_chapter_segment_context(
-        db, req.novel_id, req.chapter_id, req.segment, req.prev_segment_text or ""
+        db,
+        payload["novel_id"],
+        payload["chapter_id"],
+        segment,
+        payload.get("prev_segment_text") or "",
     )
-    if req.extra_instruction:
-        prompt += f"\n\n额外要求：{req.extra_instruction}"
+    if payload.get("extra_instruction"):
+        prompt += f"\n\n额外要求：{payload['extra_instruction']}"
 
-    return StreamingResponse(
-        _sse_stream(ai_service.stream_generate(SYSTEM_NOVEL, prompt)),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    text = await ai_job_service.collect_text(
+        job_id=job_id,
+        system_prompt=SYSTEM_NOVEL,
+        user_prompt=prompt,
+        progress_message="AI 正在生成正文片段...",
+        on_partial=lambda current: _persist_segment_partial(payload["chapter_id"], segment, base_content, current),
     )
 
+    merged = _combine_segment_content(base_content, segment, text)
+    chapter.content = merged
+    chapter.word_count = len(merged)
+    if chapter.status == "draft":
+        chapter.status = "writing"
+    db.commit()
+    db.refresh(chapter)
+    save_chapter_content(payload["novel_id"], chapter.chapter_number, merged)
+    return {"content": text, "full_content": merged}
 
-@router.post("/chat")
-async def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
-    """上下文感知AI对话，流式返回"""
-    system_prompt = context_builder.build_chat_context(db, req.novel_id, req.context_type, req.context_id)
 
-    # 构建历史消息
-    messages = [{"role": m.role, "content": m.content} for m in req.messages]
-    messages.append({"role": "user", "content": req.user_message})
+async def _execute_chat_job(db: Session, payload: dict, job_id: str) -> dict:
+    system_prompt = context_builder.build_chat_context(
+        db,
+        payload["novel_id"],
+        payload["context_type"],
+        payload.get("context_id"),
+    )
+    messages = payload.get("messages") or []
+    messages = [{"role": item["role"], "content": item["content"]} for item in messages]
+    messages.append({"role": "user", "content": payload["user_message"]})
 
-    async def chat_stream():
+    ai_job_service.set_running(job_id, "AI 正在回复...")
+    accumulated = ""
+    last_saved_length = 0
+    try:
         async for chunk in ai_service.stream_generate_with_history(system_prompt, messages):
-            yield chunk
+            accumulated += chunk
+            if len(accumulated) - last_saved_length >= ai_job_service.PARTIAL_SAVE_INTERVAL:
+                ai_job_service.update_partial(job_id, accumulated, "AI 正在回复...")
+                last_saved_length = len(accumulated)
+        ai_job_service.update_partial(job_id, accumulated, "AI 正在回复...")
+        return {"message": accumulated}
+    except Exception:
+        if accumulated:
+            ai_job_service.update_partial(job_id, accumulated, "AI 对话中断，已保留部分结果")
+        raise
 
-    return StreamingResponse(
-        _sse_stream(chat_stream()),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+
+async def _process_job(job_id: str):
+    db = SessionLocal()
+    try:
+        job = db.query(AIGenerationJob).filter(AIGenerationJob.id == job_id).first()
+        if not job:
+            return
+        payload = ai_job_service.get_request_payload(job)
+        result = None
+
+        if job.job_type == "outline":
+            result = await _execute_outline_job(db, payload, job_id)
+        elif job.job_type == "titles":
+            result = await _execute_titles_job(db, payload, job_id)
+        elif job.job_type == "book_synopsis":
+            result = await _execute_book_synopsis_job(db, payload, job_id)
+        elif job.job_type == "chapter_synopsis":
+            result = await _execute_chapter_synopsis_job(db, payload, job_id)
+        elif job.job_type == "chapter_content":
+            result = await _execute_full_chapter_job(db, payload, job_id)
+        elif job.job_type == "volume_synopsis":
+            result = await _execute_volume_synopsis_job(db, payload, job_id)
+        elif job.job_type == "characters":
+            result = await _execute_characters_job(db, payload, job_id)
+        elif job.job_type == "worldbuilding":
+            result = await _execute_worldbuilding_job(db, payload, job_id)
+        elif job.job_type == "chapter_segment":
+            result = await _execute_chapter_segment_job(db, payload, job_id)
+        elif job.job_type == "chat":
+            result = await _execute_chat_job(db, payload, job_id)
+        else:
+            raise HTTPException(400, f"未知任务类型：{job.job_type}")
+
+        ai_job_service.complete_job(job_id, result)
+    except HTTPException as exc:
+        current_job = ai_job_service.get_job(job_id)
+        ai_job_service.fail_job(
+            job_id,
+            str(exc.detail),
+            result_payload=exc.detail if isinstance(exc.detail, dict) else None,
+            partial_text=current_job.partial_text if current_job else None,
+        )
+    except Exception as exc:
+        current_job = ai_job_service.get_job(job_id)
+        ai_job_service.fail_job(
+            job_id,
+            str(exc),
+            partial_text=current_job.partial_text if current_job else None,
+        )
+    finally:
+        db.close()
+
+
+def _queue_job(
+    *,
+    background_tasks: BackgroundTasks,
+    db: Session,
+    job_type: str,
+    novel_id: str,
+    request_payload: dict,
+    chapter_id: str | None = None,
+    volume_id: str | None = None,
+) -> dict:
+    job = ai_job_service.create_job(
+        db=db,
+        job_type=job_type,
+        novel_id=novel_id,
+        request_payload=request_payload,
+        chapter_id=chapter_id,
+        volume_id=volume_id,
+    )
+    background_tasks.add_task(_process_job, job.id)
+    return ai_job_service.to_response(job)
+
+
+@router.get("/jobs/{job_id}", response_model=AIGenerationJobOut)
+def get_job_status(job_id: str, db: Session = Depends(get_db)):
+    job = db.query(AIGenerationJob).filter(AIGenerationJob.id == job_id).first()
+    if not job:
+        raise HTTPException(404, "任务不存在")
+    return ai_job_service.to_response(job)
+
+
+@router.post("/generate/outline", response_model=AIGenerationJobOut)
+async def generate_outline(
+    req: GenerateOutlineRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    return _queue_job(
+        background_tasks=background_tasks,
+        db=db,
+        job_type="outline",
+        novel_id=req.novel_id,
+        request_payload=req.model_dump(),
+    )
+
+
+@router.post("/generate/titles", response_model=AIGenerationJobOut)
+async def generate_titles(
+    req: GenerateTitlesRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    return _queue_job(
+        background_tasks=background_tasks,
+        db=db,
+        job_type="titles",
+        novel_id=req.novel_id,
+        request_payload=req.model_dump(),
+    )
+
+
+@router.post("/generate/book-synopsis", response_model=AIGenerationJobOut)
+async def generate_book_synopsis(
+    req: GenerateBookSynopsisRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    return _queue_job(
+        background_tasks=background_tasks,
+        db=db,
+        job_type="book_synopsis",
+        novel_id=req.novel_id,
+        request_payload=req.model_dump(),
+    )
+
+
+@router.post("/generate/synopsis", response_model=AIGenerationJobOut)
+async def generate_synopsis(
+    req: GenerateSynopsisRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    return _queue_job(
+        background_tasks=background_tasks,
+        db=db,
+        job_type="chapter_synopsis",
+        novel_id=req.novel_id,
+        request_payload=req.model_dump(),
+        chapter_id=req.chapter_id,
+    )
+
+
+@router.post("/synopsis/create-missing-characters")
+def create_missing_characters(req: CreateMissingCharactersRequest, db: Session = Depends(get_db)):
+    created = _create_missing_characters(db, req.novel_id, req.missing_names)
+    db.commit()
+    if created:
+        all_characters = db.query(Character).filter(Character.novel_id == req.novel_id).all()
+        save_characters(req.novel_id, _serialize_characters(all_characters))
+    return {"created": created}
+
+
+@router.post("/generate/chapter", response_model=AIGenerationJobOut)
+async def generate_chapter(
+    req: GenerateChapterRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    return _queue_job(
+        background_tasks=background_tasks,
+        db=db,
+        job_type="chapter_content",
+        novel_id=req.novel_id,
+        request_payload=req.model_dump(),
+        chapter_id=req.chapter_id,
+    )
+
+
+@router.post("/generate/volume-synopsis", response_model=AIGenerationJobOut)
+async def generate_volume_synopsis(
+    req: GenerateVolumeSynopsisRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    return _queue_job(
+        background_tasks=background_tasks,
+        db=db,
+        job_type="volume_synopsis",
+        novel_id=req.novel_id,
+        request_payload=req.model_dump(),
+        volume_id=req.volume_id,
+    )
+
+
+@router.post("/generate/characters", response_model=AIGenerationJobOut)
+async def generate_characters(
+    req: GenerateCharactersFromOutlineRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    return _queue_job(
+        background_tasks=background_tasks,
+        db=db,
+        job_type="characters",
+        novel_id=req.novel_id,
+        request_payload=req.model_dump(),
+    )
+
+
+@router.post("/generate/worldbuilding", response_model=AIGenerationJobOut)
+async def generate_worldbuilding(
+    req: GenerateWorldbuildingRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    return _queue_job(
+        background_tasks=background_tasks,
+        db=db,
+        job_type="worldbuilding",
+        novel_id=req.novel_id,
+        request_payload=req.model_dump(),
+    )
+
+
+@router.post("/generate/chapter-segment", response_model=AIGenerationJobOut)
+async def generate_chapter_segment(
+    req: GenerateChapterSegmentRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    return _queue_job(
+        background_tasks=background_tasks,
+        db=db,
+        job_type="chapter_segment",
+        novel_id=req.novel_id,
+        request_payload=req.model_dump(),
+        chapter_id=req.chapter_id,
+    )
+
+
+@router.post("/chat", response_model=AIGenerationJobOut)
+async def ai_chat(
+    req: ChatRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    return _queue_job(
+        background_tasks=background_tasks,
+        db=db,
+        job_type="chat",
+        novel_id=req.novel_id,
+        request_payload=req.model_dump(mode="json"),
+        chapter_id=req.context_id if req.context_type == "chapter" else None,
     )
 
 
 @router.post("/validate/synopsis-characters")
 def validate_characters(req: ValidateSynopsisRequest, db: Session = Depends(get_db)):
-    """校验细纲人物是否在角色库中存在"""
     return validate_synopsis_characters(db, req.novel_id, req.characters_in_synopsis)

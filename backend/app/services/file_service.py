@@ -2,7 +2,6 @@
 文件系统服务：同步数据库内容到文件系统
 """
 import json
-import os
 from pathlib import Path
 from app.config import get_settings
 
@@ -16,42 +15,54 @@ def get_project_dir(novel_id: str) -> Path:
     return project_dir
 
 
-def save_outline(novel_id: str, content: str):
-    path = get_project_dir(novel_id) / "outline.md"
+def _write_text(path: Path, content: str):
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+def _write_json(path: Path, data: dict | list):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def save_outline(novel_id: str, content: str):
+    project_dir = get_project_dir(novel_id)
+    _write_text(project_dir / "outline.md", content)
+    _write_text(project_dir / "outline" / "outline.md", content)
+
+
+def save_outline_struct(novel_id: str, outline_data: dict):
+    project_dir = get_project_dir(novel_id)
+    _write_json(project_dir / "outline" / "outline.json", outline_data)
 
 
 def save_synopsis(novel_id: str, content: str):
-    path = get_project_dir(novel_id) / "synopsis.md"
-    path.write_text(content, encoding="utf-8")
+    project_dir = get_project_dir(novel_id)
+    _write_text(project_dir / "synopsis.md", content)
+    _write_text(project_dir / "book" / "synopsis.md", content)
 
 
 def save_book_meta(novel_id: str, title: str, synopsis: str | None):
-    path = get_project_dir(novel_id) / "book_meta.json"
-    path.write_text(
-        json.dumps(
-            {"title": title, "synopsis": synopsis or ""},
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    project_dir = get_project_dir(novel_id)
+    data = {"title": title, "synopsis": synopsis or ""}
+    _write_json(project_dir / "book_meta.json", data)
+    _write_json(project_dir / "book" / "book_meta.json", data)
 
 
 def save_characters(novel_id: str, characters_data: list):
-    path = get_project_dir(novel_id) / "characters.json"
-    path.write_text(
-        json.dumps({"characters": characters_data}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    project_dir = get_project_dir(novel_id)
+    data = {"characters": characters_data}
+    _write_json(project_dir / "characters.json", data)
+    _write_json(project_dir / "characters" / "characters.json", data)
 
 
 def save_worldbuilding(novel_id: str, wb_data: dict):
-    path = get_project_dir(novel_id) / "worldbuilding.json"
-    path.write_text(
-        json.dumps(wb_data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    project_dir = get_project_dir(novel_id)
+    _write_json(project_dir / "worldbuilding.json", wb_data)
+    _write_json(project_dir / "world" / "worldbuilding.json", wb_data)
 
 
 def append_plot_summary(novel_id: str, chapter_number: int, title: str, summary: str):
@@ -65,14 +76,18 @@ def save_chapter_synopsis(novel_id: str, chapter_number: int, synopsis_data: dic
     chapter_dir = get_project_dir(novel_id) / "chapters" / f"chapter_{chapter_number:03d}"
     chapter_dir.mkdir(parents=True, exist_ok=True)
     path = chapter_dir / "synopsis.json"
-    path.write_text(
-        json.dumps(synopsis_data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    _write_json(path, synopsis_data)
 
 
 def save_chapter_content(novel_id: str, chapter_number: int, content: str):
     chapter_dir = get_project_dir(novel_id) / "chapters" / f"chapter_{chapter_number:03d}"
     chapter_dir.mkdir(parents=True, exist_ok=True)
     path = chapter_dir / "content.md"
-    path.write_text(content, encoding="utf-8")
+    _write_text(path, content)
+
+
+def save_volume_plan(novel_id: str, volume_number: int, content: str, plan_data: dict):
+    volume_dir = get_project_dir(novel_id) / "volumes" / f"volume_{volume_number:02d}"
+    volume_dir.mkdir(parents=True, exist_ok=True)
+    _write_text(volume_dir / "plan.md", content)
+    _write_json(volume_dir / "plan.json", plan_data)

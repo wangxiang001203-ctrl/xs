@@ -7,6 +7,7 @@ from app.models import Novel, Character, Chapter, Synopsis
 from app.models.worldbuilding import Worldbuilding
 from app.models.project import Outline
 from app.models.volume import Volume
+from app.services.worldbuilding_service import load_worldbuilding_document, summarize_worldbuilding_document
 
 
 # 每次AI调用注入的最大token预算（为输出留空间）
@@ -96,7 +97,7 @@ def build_synopsis_context(db: Session, novel_id: str, chapter_number: int) -> s
     "scene": "开场场景描述",
     "mood": "基调/氛围",
     "hook": "开头钩子/吸引点",
-    "characters": ["角色名（必须在角色列表中存在）"]
+        "characters": ["角色名"]
   }},
   "development": {{
     "events": ["事件1", "事件2"],
@@ -112,7 +113,9 @@ def build_synopsis_context(db: Session, novel_id: str, chapter_number: int) -> s
 }}
 ```
 
-注意：characters字段中的所有人物名必须在上方角色列表中存在。""")
+注意：
+1. 优先使用已有角色列表中的人物名
+2. 如果确实需要新增临时人物，可以直接写人物名，系统会在后续流程中补录角色卡""")
 
     return "\n".join(parts)
 
@@ -190,18 +193,11 @@ def build_chapter_context(db: Session, novel_id: str, chapter_id: str) -> str:
 
 
 def _summarize_worldbuilding(wb: Worldbuilding) -> str:
-    parts = []
-    if wb.realm_system:
-        levels = wb.realm_system.get("levels", [])
-        level_names = [l["name"] if isinstance(l, dict) else l for l in levels]
-        parts.append(f"境界体系：{'→'.join(level_names)}")
-    if wb.currency:
-        units = wb.currency.get("units", [])
-        parts.append(f"货币：{' / '.join(units)}（公共通用）")
-    if wb.factions:
-        faction_names = [f.get("name", "") if isinstance(f, dict) else f for f in wb.factions[:5]]
-        parts.append(f"主要势力：{', '.join(faction_names)}")
-    return "\n".join(parts) if parts else "暂无设定"
+    if not wb:
+        return "暂无设定"
+    novel_id = getattr(wb, "novel_id", "")
+    document = load_worldbuilding_document(novel_id, wb) if novel_id else {}
+    return summarize_worldbuilding_document(document)
 
 
 def _summarize_characters(characters: list) -> str:
@@ -229,7 +225,12 @@ def _character_card(c: Character) -> str:
 """
 
 
-def build_volume_synopsis_context(db: Session, novel_id: str, volume_id: str) -> str:
+def build_volume_synopsis_context(
+    db: Session,
+    novel_id: str,
+    volume_id: str,
+    chapter_numbers: list[int] | None = None,
+) -> str:
     """生成整卷所有章节细纲的prompt（一次性批量生成）"""
     novel = db.query(Novel).filter(Novel.id == novel_id).first()
     volume = db.query(Volume).filter(Volume.id == volume_id).first()
@@ -240,9 +241,10 @@ def build_volume_synopsis_context(db: Session, novel_id: str, volume_id: str) ->
     characters = db.query(Character).filter(Character.novel_id == novel_id).all()
 
     # 本卷所有章节（按章号排序）
-    chapters = db.query(Chapter).filter(
-        Chapter.volume_id == volume_id
-    ).order_by(Chapter.chapter_number).all()
+    chapter_query = db.query(Chapter).filter(Chapter.volume_id == volume_id)
+    if chapter_numbers:
+        chapter_query = chapter_query.filter(Chapter.chapter_number.in_(chapter_numbers))
+    chapters = chapter_query.order_by(Chapter.chapter_number).all()
 
     # 上一卷最后3章的剧情缩略（连贯性）
     first_ch_num = chapters[0].chapter_number if chapters else 1
@@ -267,7 +269,7 @@ def build_volume_synopsis_context(db: Session, novel_id: str, volume_id: str) ->
 
     if characters:
         char_summary = _summarize_characters(characters)
-        parts.append(f"## 角色列表（出场人物必须从此列表选取）\n{char_summary}\n")
+        parts.append(f"## 角色列表（优先使用已有角色）\n{char_summary}\n")
 
     if prev_chapters:
         prev_chapters.reverse()
@@ -279,10 +281,10 @@ def build_volume_synopsis_context(db: Session, novel_id: str, volume_id: str) ->
     chapter_list = "\n".join(
         f"- 第{c.chapter_number}章：{c.title or f'第{c.chapter_number}章'}" for c in chapters
     )
-    parts.append(f"## 本卷章节列表\n{chapter_list}\n")
+    parts.append(f"## 本次待生成章节列表\n{chapter_list}\n")
 
     parts.append(f"""## 任务
-请为本卷所有章节批量生成细纲，输出一个JSON数组，每个元素对应一章：
+请为本次列出的章节批量生成细纲，输出一个JSON数组，每个元素对应一章：
 
 ```json
 [
@@ -312,10 +314,10 @@ def build_volume_synopsis_context(db: Session, novel_id: str, volume_id: str) ->
 ```
 
 要求：
-1. 数组长度必须等于本卷章节数（{len(chapters)}章）
+1. 数组长度必须等于本次章节数（{len(chapters)}章）
 2. chapter_number 与章节列表一一对应
 3. 章节间剧情要连贯，前一章的 next_chapter_hook 要与下一章的 opening 呼应
-4. 所有 characters 字段中的人物必须在角色列表中存在
+4. 优先使用角色列表中的人物；如果剧情确实需要新增临时人物，可以直接写人物名，系统会后补角色占位
 5. 只输出JSON，不要输出任何说明文字""")
 
     return "\n".join(parts)

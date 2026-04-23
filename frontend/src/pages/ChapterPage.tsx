@@ -1,25 +1,35 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { Tabs, Button, Input, InputNumber, Select, Tag, Alert, message, Spin, Tooltip } from 'antd'
 import { ThunderboltOutlined, CheckOutlined, WarningOutlined } from '@ant-design/icons'
 import CodeMirror from '@uiw/react-codemirror'
 import { markdown } from '@codemirror/lang-markdown'
 import { EditorView } from '@codemirror/view'
-import { api, streamRequest, streamChapterSegment } from '../api'
+import { api } from '../api'
 import { useAppStore } from '../store'
-import type { Synopsis, Chapter } from '../types'
+import type { Synopsis } from '../types'
 import styles from './ChapterPage.module.css'
 
 export default function ChapterPage() {
-  const { currentNovel, currentChapter, setCurrentChapter, characters, chapters, setChapters } = useAppStore()
+  const {
+    currentNovel,
+    currentChapter,
+    setCurrentChapter,
+    characters,
+    setCharacters,
+    chapters,
+    setChapters,
+    documentDrafts,
+    patchDocumentDraft,
+    clearDocumentDraft,
+  } = useAppStore()
   const [synopsis, setSynopsis] = useState<Synopsis | null>(null)
   const [localSynopsis, setLocalSynopsis] = useState<Partial<Synopsis>>({})
   const [content, setContent] = useState('')
   const [activeTab, setActiveTab] = useState('synopsis')
   const [generating, setGenerating] = useState(false)
-  const [streamText, setStreamText] = useState('')
   const [validation, setValidation] = useState<{ valid: boolean; missing: string[] } | null>(null)
   const [saving, setSaving] = useState(false)
-  const abortRef = useRef<AbortController | null>(null)
+  const docKey = currentChapter ? `chapter:${currentChapter.id}` : null
 
   useEffect(() => {
     if (currentChapter) {
@@ -27,19 +37,34 @@ export default function ChapterPage() {
     }
   }, [currentChapter?.id])
 
-  async function loadData() {
+  useEffect(() => {
+    if (!docKey) return
+    patchDocumentDraft(docKey, {
+      localSynopsis,
+      content,
+      activeTab,
+    })
+  }, [docKey, localSynopsis, content, activeTab])
+
+  async function loadData(ignoreDraft = false) {
     if (!currentChapter || !currentNovel) return
+    const draft = (ignoreDraft || !docKey ? null : documentDrafts[docKey]) as {
+      localSynopsis?: Partial<Synopsis>
+      content?: string
+      activeTab?: string
+    } | null
     // 加载正文
     const ch = await api.chapters.get(currentNovel.id, currentChapter.id)
-    setContent(ch.content || '')
+    setContent(draft?.content ?? ch.content ?? '')
+    setActiveTab(draft?.activeTab || 'synopsis')
     // 加载细纲
     try {
       const s = await api.chapters.getSynopsis(currentNovel.id, currentChapter.id)
       setSynopsis(s)
-      setLocalSynopsis(s)
+      setLocalSynopsis(draft?.localSynopsis ?? s)
     } catch {
       setSynopsis(null)
-      setLocalSynopsis({ word_count_target: 3000, opening_characters: [], development_characters: [], development_events: [], development_conflicts: [], all_characters: [] })
+      setLocalSynopsis(draft?.localSynopsis ?? { word_count_target: 3000, opening_characters: [], development_characters: [], development_events: [], development_conflicts: [], all_characters: [] })
     }
   }
 
@@ -80,51 +105,52 @@ export default function ChapterPage() {
   async function generateSynopsis() {
     if (!currentNovel || !currentChapter) return
     setGenerating(true)
-    setStreamText('正在生成细纲并解析为结构化数据，请稍候...')
     try {
-      const res = await fetch('/api/ai/generate/synopsis', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          novel_id: currentNovel.id,
-          chapter_id: currentChapter.id,
-          chapter_number: currentChapter.chapter_number,
-        })
+      const result = await api.ai.generateSynopsis({
+        novel_id: currentNovel.id,
+        chapter_id: currentChapter.id,
+        chapter_number: currentChapter.chapter_number,
       })
-      if (!res.ok) throw new Error(await res.text())
-      
-      message.success('细纲生成并保存成功，请检查内容')
-      await loadData() // reload to get new synopsis data
+      if (result.auto_created_characters && result.auto_created_characters.length > 0) {
+        const nextCharacters = await api.characters.list(currentNovel.id)
+        setCharacters(nextCharacters)
+        message.success(`细纲生成成功，并自动补录了角色：${result.auto_created_characters.join('、')}`)
+      } else {
+        message.success('细纲生成并保存成功，请检查内容')
+      }
+      if (docKey) clearDocumentDraft(docKey)
+      await loadData(true)
       validateChars()
     } catch (e: any) {
-      message.error(`生成失败: ${e.message}`)
+      const detail = e?.response?.data?.detail
+      if (detail?.missing) {
+        setValidation({ valid: false, missing: detail.missing })
+        message.warning(`细纲中出现新角色：${detail.missing.join('、')}`)
+      } else {
+        message.error(`生成失败: ${detail?.message || detail || e.message}`)
+      }
     } finally {
       setGenerating(false)
-      setStreamText('')
     }
   }
 
-  function generateSegment(segment: 'opening' | 'middle' | 'ending') {
+  async function generateSegment(segment: 'opening' | 'middle' | 'ending') {
     if (!currentNovel || !currentChapter) return
     if (!synopsis) { message.warning('请先保存细纲'); return }
     setGenerating(true)
-    setStreamText('')
     setActiveTab('content')
     const prevText = content.slice(-300)
-    let accumulated = ''
-    abortRef.current = streamChapterSegment(
-      currentNovel.id, currentChapter.id, segment, prevText,
-      (chunk: string) => { accumulated += chunk; setStreamText(accumulated) },
-      async () => {
-        setGenerating(false)
-        const newContent = segment === 'opening' ? accumulated : content + '\n\n' + accumulated
-        setContent(newContent)
-        setStreamText('')
-        await api.chapters.update(currentNovel!.id, currentChapter!.id, { content: newContent })
-        message.success(`${segment === 'opening' ? '开头' : segment === 'middle' ? '中间' : '结尾'}段生成完成`)
-      },
-      (err: string) => { setGenerating(false); message.error(`生成失败：${err}`) },
-    )
+    try {
+      const result = await api.ai.generateChapterSegment(currentNovel.id, currentChapter.id, segment, prevText)
+      setContent(result.full_content)
+      await api.chapters.update(currentNovel.id, currentChapter.id, { content: result.full_content })
+      message.success(`${segment === 'opening' ? '开头' : segment === 'middle' ? '中间' : '结尾'}段生成完成`)
+    } catch (e: any) {
+      message.error(`生成失败：${e?.response?.data?.detail || e.message}`)
+      await loadData(true)
+    } finally {
+      setGenerating(false)
+    }
   }
 
   async function saveContent() {
@@ -158,15 +184,8 @@ export default function ChapterPage() {
   async function quickCreateMissingCharacters() {
     if (!currentNovel || !validation || validation.valid) return
     try {
-      for (const name of validation.missing) {
-        await api.characters.create(currentNovel.id, {
-          name,
-          role: '配角',
-          background: '在细纲中首次出现',
-          personality: '待补充',
-        })
-      }
-      message.success('缺失角色快速创建成功！')
+      const res = await api.ai.createMissingCharacters(currentNovel.id, validation.missing)
+      message.success(`已创建 ${res.created.length} 个缺失角色`)
       await loadData()
       validateChars()
     } catch (e: any) {
@@ -185,11 +204,6 @@ export default function ChapterPage() {
         >
           AI生成细纲
         </Button>
-        {streamText && activeTab === 'synopsis' && (
-          <div className={styles.streamPreview}>
-            <pre>{streamText}</pre>
-          </div>
-        )}
       </div>
 
       {/* 人物校验提示 */}
@@ -336,12 +350,11 @@ export default function ChapterPage() {
         </div>
       </div>
       <CodeMirror
-        value={generating ? streamText : content}
+        value={content}
         onChange={setContent}
         extensions={[markdown(), EditorView.lineWrapping]}
         theme="dark"
         className={styles.editor}
-        readOnly={generating}
       />
     </div>
   )

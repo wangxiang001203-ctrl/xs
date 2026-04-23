@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Card, Input, Skeleton, Space, message } from 'antd'
 import { api } from '../api'
+import type { ModelConfig } from '../types'
 import styles from './AdminWorkflowPage.module.css'
 
 type FlowNode = { id: string; name: string; next: string }
@@ -10,6 +11,7 @@ export default function AdminWorkflowPage() {
   const [saving, setSaving] = useState(false)
   const [flow, setFlow] = useState<FlowNode[]>([])
   const [prompts, setPrompts] = useState<Record<string, string>>({})
+  const [modelConfig, setModelConfig] = useState<ModelConfig | null>(null)
 
   useEffect(() => {
     ;(async () => {
@@ -17,6 +19,7 @@ export default function AdminWorkflowPage() {
         const data = await api.admin.getWorkflowConfig()
         setFlow(data.flow || [])
         setPrompts(data.prompts || {})
+        setModelConfig(data.model_config || null)
       } catch {
         message.error('加载后台流程配置失败')
       } finally {
@@ -28,9 +31,14 @@ export default function AdminWorkflowPage() {
   async function saveConfig() {
     setSaving(true)
     try {
-      const res = await api.admin.updateWorkflowConfig({ flow, prompts })
+      const res = await api.admin.updateWorkflowConfig({
+        flow,
+        prompts,
+        model_config: modelConfig || { active_provider: '', active_model: '', providers: [] },
+      })
       setFlow(res.flow || [])
       setPrompts(res.prompts || {})
+      setModelConfig(res.model_config || null)
       message.success('流程与提示词已保存')
     } catch {
       message.error('保存失败')
@@ -86,7 +94,21 @@ export default function AdminWorkflowPage() {
           保存后台配置
         </Button>
       </Card>
+
+      {modelConfig && (
+        <Card className={styles.card} title="当前模型配置">
+          <div className={styles.promptKey}>active_provider</div>
+          <div>{modelConfig.active_provider}</div>
+          <div className={styles.promptKey} style={{ marginTop: 12 }}>active_model</div>
+          <div>{modelConfig.active_model}</div>
+          <Alert
+            type="info"
+            showIcon
+            className={styles.tip}
+            message="左侧导航已支持直接切换模型。这里主要展示当前生效配置，保存流程配置时也会一并保留模型设置。"
+          />
+        </Card>
+      )}
     </div>
   )
 }
-

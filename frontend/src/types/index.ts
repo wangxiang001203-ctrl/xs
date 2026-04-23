@@ -68,11 +68,30 @@ export interface Relationship {
 export interface Worldbuilding {
   id: string
   novel_id: string
+  overview?: string
+  sections?: WorldbuildingSection[]
   power_system?: Record<string, any>[]
   factions?: Record<string, any>[]
   geography?: Record<string, any>[]
   core_rules?: Record<string, any>[]
   items?: Record<string, any>[]
+}
+
+export interface WorldbuildingSection {
+  id?: string
+  name: string
+  description?: string
+  generation_hint?: string
+  entries: WorldbuildingEntry[]
+}
+
+export interface WorldbuildingEntry {
+  id?: string
+  name: string
+  summary?: string
+  details?: string
+  tags?: string[]
+  attributes?: Record<string, any>
 }
 
 export interface RealmSystem {
@@ -171,4 +190,46 @@ export interface Synopsis {
   all_characters: string[]
   word_count_target: number
   plot_summary_update?: string
+}
+
+export interface ModelCatalogItem {
+  id: string
+  name: string
+}
+
+export interface ModelProviderConfig {
+  id: string
+  name: string
+  api_base: string
+  api_key_source: string
+  models: ModelCatalogItem[]
+}
+
+export interface ModelConfig {
+  active_provider: string
+  active_model: string
+  providers: ModelProviderConfig[]
+}
+
+export interface WorkflowConfig {
+  flow: Array<{ id: string; name: string; next: string }>
+  prompts: Record<string, string>
+  model_config: ModelConfig
+}
+
+export interface AIGenerationJob<T = any> {
+  id: string
+  novel_id: string
+  chapter_id?: string | null
+  volume_id?: string | null
+  job_type: string
+  status: 'queued' | 'running' | 'completed' | 'failed'
+  progress_message?: string | null
+  result_payload?: T | null
+  partial_text?: string | null
+  error_message?: string | null
+  created_at: string
+  started_at?: string | null
+  finished_at?: string | null
+  updated_at: string
 }

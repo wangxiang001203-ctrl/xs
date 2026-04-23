@@ -1,22 +1,40 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { Button, Input, Alert, Spin, message, Tag, Radio, Space, Modal } from 'antd'
 import { ThunderboltOutlined, CheckOutlined, EditOutlined } from '@ant-design/icons'
 import CodeMirror from '@uiw/react-codemirror'
 import { markdown } from '@codemirror/lang-markdown'
 import { EditorView } from '@codemirror/view'
-import { api, streamRequest } from '../api'
+import { api } from '../api'
 import { useAppStore } from '../store'
 import type { Outline } from '../types'
 import styles from './OutlinePage.module.css'
 
 const { TextArea } = Input
 
+interface OutlineDraft {
+  idea?: string
+  editContent?: string
+  titlePrompt?: string
+  titleOptions?: string[]
+  selectedTitle?: string
+  synopsis?: string
+  editing?: boolean
+}
+
 export default function OutlinePage() {
-  const { currentNovel, setCurrentNovel } = useAppStore()
+  const {
+    currentNovel,
+    setCurrentNovel,
+    setCharacters,
+    setWorldbuilding,
+    setVolumes,
+    documentDrafts,
+    patchDocumentDraft,
+    clearDocumentDraft,
+  } = useAppStore()
   const [idea, setIdea] = useState(currentNovel?.idea || '')
   const [outline, setOutline] = useState<Outline | null>(null)
   const [generating, setGenerating] = useState(false)
-  const [streamText, setStreamText] = useState('')
   const [editing, setEditing] = useState(false)
   const [editContent, setEditContent] = useState('')
   const [saving, setSaving] = useState(false)
@@ -24,35 +42,55 @@ export default function OutlinePage() {
   const [titleOptions, setTitleOptions] = useState<string[]>([])
   const [selectedTitle, setSelectedTitle] = useState<string>('')
   const [generatingTitles, setGeneratingTitles] = useState(false)
-  const [synopsisPrompt, setSynopsisPrompt] = useState('')
   const [synopsis, setSynopsis] = useState(currentNovel?.synopsis || '')
-  const [generatingSynopsis, setGeneratingSynopsis] = useState(false)
   const [titleModalOpen, setTitleModalOpen] = useState(false)
-  const [synopsisModalOpen, setSynopsisModalOpen] = useState(false)
-  const abortRef = useRef<AbortController | null>(null)
+  const docKey = currentNovel ? `outline:${currentNovel.id}` : null
+  const outlineDraft = (docKey ? documentDrafts[docKey] : null) as OutlineDraft | null
 
   useEffect(() => {
     if (currentNovel) {
-      setIdea(currentNovel.idea || '')
-      setSynopsis(currentNovel.synopsis || '')
-      setSelectedTitle(currentNovel.title || '')
-      loadOutline()
+      setIdea(outlineDraft?.idea ?? currentNovel.idea ?? '')
+      setSynopsis(outlineDraft?.synopsis ?? currentNovel.synopsis ?? '')
+      setSelectedTitle(outlineDraft?.selectedTitle ?? '')
+      setTitlePrompt(outlineDraft?.titlePrompt ?? '')
+      setTitleOptions(outlineDraft?.titleOptions ?? [])
+      setEditing(Boolean(outlineDraft?.editing))
+      loadOutline(outlineDraft)
     }
   }, [currentNovel?.id])
 
   useEffect(() => {
-    setSynopsis(currentNovel?.synopsis || '')
-    setSelectedTitle(currentNovel?.title || '')
-  }, [currentNovel?.title, currentNovel?.synopsis])
+    if (!docKey) return
+    patchDocumentDraft(docKey, {
+      idea,
+      editContent,
+      titlePrompt,
+      titleOptions,
+      selectedTitle,
+      synopsis,
+      editing,
+    })
+  }, [docKey, idea, editContent, titlePrompt, titleOptions, selectedTitle, synopsis, editing])
 
-  async function loadOutline() {
+  async function loadOutline(draft?: OutlineDraft | null) {
     if (!currentNovel) return
     try {
       const o = await api.outline.latest(currentNovel.id)
       setOutline(o)
-      setEditContent(o.content || '')
+      if (!draft?.editContent) {
+        setEditContent(o.content || '')
+      }
+      if (!draft?.selectedTitle) {
+        setSelectedTitle(o.title || '')
+      }
+      if (!draft?.synopsis) {
+        setSynopsis(o.synopsis || currentNovel.synopsis || '')
+      }
     } catch {
       setOutline(null)
+      if (!draft?.editContent) {
+        setEditContent('')
+      }
     }
   }
 
@@ -63,54 +101,51 @@ export default function OutlinePage() {
     }
     setGenerating(true)
     setOutline(null)
-    setStreamText('AI 正在推演大纲结构，请稍候...')
-
-    fetch('/api/ai/generate/outline', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ novel_id: currentNovel.id, idea })
-    })
-      .then(async (res) => {
-        if (!res.ok) throw new Error('生成失败')
-        const data = await res.json()
+    api.ai.generateOutline(currentNovel.id, idea)
+      .then((data) => {
         setOutline(data)
-        setEditContent(data.content)
+        setEditContent(data.content || '')
+        setSelectedTitle(data.title || '')
+        setSynopsis(data.synopsis || '')
         message.success('大纲生成完成')
-        
-        // 更新小说状态
         setCurrentNovel({
           ...currentNovel,
           idea,
-          title: data.title || currentNovel.title,
-          synopsis: data.synopsis || currentNovel.synopsis
         })
       })
-      .catch((err) => {
-        message.error(`生成失败：${err.message}`)
+      .catch((err: any) => {
+        message.error(`生成失败：${err?.response?.data?.detail || err.message}`)
       })
       .finally(() => {
         setGenerating(false)
-        setStreamText('')
       })
   }
 
-  function stopGenerate() {
-    setGenerating(false)
-    setStreamText('')
-  }
-
   async function confirmOutline() {
-    if (!outline || !currentNovel) return
+    if (!outline || !currentNovel || !docKey) return
     setSaving(true)
     try {
       const updated = await api.outline.update(currentNovel.id, outline.id, {
         confirmed: true,
         content: editContent || outline.content,
+        title: selectedTitle || outline.title,
+        synopsis: synopsis || outline.synopsis,
       })
       setOutline(updated)
-      // 更新小说idea
       await api.novels.update(currentNovel.id, { idea })
-      setCurrentNovel({ ...currentNovel, idea })
+      const [novel, volumes, chars, wb] = await Promise.all([
+        api.novels.get(currentNovel.id),
+        api.volumes.list(currentNovel.id).catch(() => []),
+        api.characters.list(currentNovel.id),
+        api.worldbuilding.get(currentNovel.id).catch(() => null),
+      ])
+      setCurrentNovel(novel)
+      setVolumes(volumes)
+      setCharacters(chars)
+      setWorldbuilding(wb)
+      setSelectedTitle(updated.title || selectedTitle)
+      setSynopsis(updated.synopsis || synopsis)
+      clearDocumentDraft(docKey)
       message.success('大纲已确认保存')
     } catch {
       message.error('保存失败')
@@ -151,29 +186,10 @@ export default function OutlinePage() {
     try {
       const updated = await api.novels.update(currentNovel.id, { title: selectedTitle })
       setCurrentNovel(updated)
+      setTitleModalOpen(false)
       message.success('书名已替换')
     } catch {
       message.error('书名更新失败')
-    }
-  }
-
-  async function generateSynopsis() {
-    if (!currentNovel) return
-    if (!outline?.confirmed) {
-      message.warning('请先确认大纲')
-      return
-    }
-    setGeneratingSynopsis(true)
-    try {
-      const res = await api.ai.generateBookSynopsis(currentNovel.id, synopsisPrompt.trim() || undefined)
-      setSynopsis(res.synopsis || '')
-      const updated = await api.novels.get(currentNovel.id)
-      setCurrentNovel(updated)
-      message.success('简介已生成并保存到文件')
-    } catch (e: any) {
-      message.error(e?.response?.data?.detail || '简介生成失败')
-    } finally {
-      setGeneratingSynopsis(false)
     }
   }
 
@@ -192,8 +208,6 @@ export default function OutlinePage() {
     }
   }
 
-  const displayContent = editing ? editContent : (outline?.content || streamText)
-
   return (
     <div className={styles.page}>
       {/* 顶部：Idea输入 */}
@@ -208,18 +222,15 @@ export default function OutlinePage() {
           disabled={generating}
         />
         <div className={styles.ideaActions}>
-          {!generating ? (
-            <Button
-              type="primary"
-              icon={<ThunderboltOutlined />}
-              onClick={startGenerate}
-              disabled={!idea.trim()}
-            >
-              AI生成大纲
-            </Button>
-          ) : (
-            <Button danger onClick={stopGenerate}>停止生成</Button>
-          )}
+          <Button
+            type="primary"
+            icon={<ThunderboltOutlined />}
+            onClick={startGenerate}
+            disabled={!idea.trim() || generating}
+            loading={generating}
+          >
+            AI生成大纲
+          </Button>
           {outline && !outline.confirmed && (
             <Tag color="orange">待确认</Tag>
           )}
@@ -240,7 +251,7 @@ export default function OutlinePage() {
             {outline && !editing && (
               <Button
                 size="small" icon={<EditOutlined />}
-                onClick={() => { setEditing(true); setEditContent(outline.content || '') }}
+                onClick={() => { setEditing(true); setEditContent(editContent || outline.content || '') }}
               >
                 编辑源码
               </Button>
@@ -262,25 +273,20 @@ export default function OutlinePage() {
               </Button>
             )}
             {outline?.confirmed && !editing && (
-              <>
-                <Button size="small" onClick={() => setTitleModalOpen(true)}>
-                  重新生成标题
-                </Button>
-                <Button size="small" onClick={() => setSynopsisModalOpen(true)}>
-                  重新生成简介
-                </Button>
-              </>
+              <Button size="small" onClick={() => setTitleModalOpen(true)}>
+                重新生成标题
+              </Button>
             )}
           </div>
         </div>
 
-        {generating && !streamText && (
+        {generating && (
           <div className={styles.loadingArea}>
             <Spin tip="AI正在推演大纲结构..." />
           </div>
         )}
 
-        {(streamText || outline) ? (
+        {outline ? (
           editing ? (
             <CodeMirror
               value={editContent}
@@ -290,31 +296,8 @@ export default function OutlinePage() {
               className={styles.editor}
             />
           ) : (
-            <div className={styles.structuredOutline}>
-              {outline ? (
-                <>
-                  <div className={styles.fieldGroup}>
-                    <h3>书名</h3>
-                    <p>{outline.title || currentNovel?.title}</p>
-                  </div>
-                  <div className={styles.fieldGroup}>
-                    <h3>简介</h3>
-                    <p>{outline.synopsis || currentNovel?.synopsis}</p>
-                  </div>
-                  <div className={styles.fieldGroup}>
-                    <h3>核心卖点 / 金手指</h3>
-                    <p>{outline.selling_points || '暂无'}</p>
-                  </div>
-                  <div className={styles.fieldGroup}>
-                    <h3>主线大纲</h3>
-                    <pre className={styles.plotContent}>{outline.main_plot || '暂无'}</pre>
-                  </div>
-                </>
-              ) : (
-                <div className={styles.preview}>
-                  <pre className={styles.previewContent}>{streamText}</pre>
-                </div>
-              )}
+            <div className={styles.preview}>
+              <pre className={styles.previewContent}>{outline.content}</pre>
             </div>
           )
         ) : (
@@ -371,28 +354,6 @@ export default function OutlinePage() {
         )}
       </Modal>
 
-      <Modal
-        title="生成简介"
-        open={synopsisModalOpen}
-        onCancel={() => setSynopsisModalOpen(false)}
-        footer={null}
-        destroyOnClose
-      >
-        <Input.TextArea
-          value={synopsisPrompt}
-          onChange={e => setSynopsisPrompt(e.target.value)}
-          placeholder="可选：输入简介偏好，例如“强调成长线与复仇线，语气更燃”"
-          autoSize={{ minRows: 2, maxRows: 4 }}
-        />
-        <Space className={styles.postActions}>
-          <Button loading={generatingSynopsis} onClick={generateSynopsis} type="primary">
-            生成简介
-          </Button>
-        </Space>
-        {!!synopsis && (
-          <pre className={styles.synopsisPreview}>{synopsis}</pre>
-        )}
-      </Modal>
     </div>
   )
 }

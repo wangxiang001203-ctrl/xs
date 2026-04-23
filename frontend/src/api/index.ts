@@ -1,10 +1,63 @@
 import axios from 'axios'
-import type { Novel, Outline, Character, Worldbuilding, Chapter, Synopsis, Volume } from '../types'
+import type {
+  AIGenerationJob,
+  Chapter,
+  Character,
+  Novel,
+  Outline,
+  Synopsis,
+  Volume,
+  WorkflowConfig,
+  Worldbuilding,
+} from '../types'
+
+const JOB_POLL_INTERVAL_MS = 2000
+const JOB_WAIT_TIMEOUT_MS = 30 * 60 * 1000
 
 const http = axios.create({
-  baseURL: 'http://localhost:8000',
+  baseURL: '',
   timeout: 30000,
 })
+
+function sleep(ms: number) {
+  return new Promise(resolve => window.setTimeout(resolve, ms))
+}
+
+function buildJobError<T>(job: AIGenerationJob<T>) {
+  const detail = job.result_payload ?? job.error_message ?? 'AI任务失败'
+  const error: any = new Error(typeof detail === 'string' ? detail : job.error_message || 'AI任务失败')
+  error.job = job
+  error.response = { data: { detail } }
+  return error
+}
+
+async function waitForJob<T>(jobId: string): Promise<AIGenerationJob<T>> {
+  const startedAt = Date.now()
+  while (true) {
+    const job = await http.get<AIGenerationJob<T>>(`/api/ai/jobs/${jobId}`).then(r => r.data)
+    if (job.status === 'completed') {
+      return job
+    }
+    if (job.status === 'failed') {
+      throw buildJobError(job)
+    }
+    if (Date.now() - startedAt > JOB_WAIT_TIMEOUT_MS) {
+      throw new Error('AI任务仍在后台处理中，请稍后刷新页面查看结果')
+    }
+    await sleep(JOB_POLL_INTERVAL_MS)
+  }
+}
+
+async function runAiJob<TResult>(
+  url: string,
+  body: object,
+  transform?: (payload: any) => TResult,
+): Promise<TResult> {
+  const job = await http.post<AIGenerationJob>(url, body).then(r => r.data)
+  const finished = await waitForJob(job.id)
+  const payload = finished.result_payload
+  return transform ? transform(payload) : payload as TResult
+}
 
 // ── 项目 ──────────────────────────────────────────────────────────────────────
 export const api = {
@@ -57,21 +110,68 @@ export const api = {
   },
 
   ai: {
+    generateOutline: (novelId: string, idea: string) =>
+      runAiJob<Outline>('/api/ai/generate/outline', { novel_id: novelId, idea }),
+    generateWorldbuilding: (
+      novelId: string,
+      options?: { outlineId?: string; extraInstruction?: string; currentWorldbuilding?: Partial<Worldbuilding> },
+    ) =>
+      runAiJob<Worldbuilding>('/api/ai/generate/worldbuilding', {
+        novel_id: novelId,
+        outline_id: options?.outlineId,
+        extra_instruction: options?.extraInstruction,
+        current_worldbuilding: options?.currentWorldbuilding,
+      }),
+    generateCharactersFromOutline: (novelId: string, outlineId?: string) =>
+      runAiJob<Character[]>(
+        '/api/ai/generate/characters',
+        { novel_id: novelId, outline_id: outlineId },
+        (payload) => payload?.characters || [],
+      ),
+    generateSynopsis: (payload: { novel_id: string; chapter_id: string; chapter_number: number; extra_instruction?: string }) =>
+      runAiJob<{ status: string; auto_created_characters?: string[] }>('/api/ai/generate/synopsis', payload),
     validateCharacters: (novelId: string, names: string[]) =>
       http.post<{ valid: boolean; missing: string[] }>('/api/ai/validate/synopsis-characters', {
         novel_id: novelId,
         characters_in_synopsis: names,
       }).then(r => r.data),
+    createMissingCharacters: (novelId: string, missingNames: string[]) =>
+      http.post<{ created: string[] }>('/api/ai/synopsis/create-missing-characters', {
+        novel_id: novelId,
+        missing_names: missingNames,
+      }).then(r => r.data),
     generateTitles: (novelId: string, extraInstruction?: string) =>
-      http.post<{ titles: string[] }>('/api/ai/generate/titles', {
+      runAiJob<{ titles: string[] }>('/api/ai/generate/titles', {
         novel_id: novelId,
         extra_instruction: extraInstruction,
-      }).then(r => r.data),
+      }),
     generateBookSynopsis: (novelId: string, extraInstruction?: string) =>
-      http.post<{ synopsis: string }>('/api/ai/generate/book-synopsis', {
+      runAiJob<{ synopsis: string }>('/api/ai/generate/book-synopsis', {
         novel_id: novelId,
         extra_instruction: extraInstruction,
-      }).then(r => r.data),
+      }),
+    generateVolumeSynopsis: (novelId: string, volumeId: string, extraInstruction?: string) =>
+      runAiJob<{ status: string; chapter_count?: number; auto_created_characters?: string[] }>('/api/ai/generate/volume-synopsis', {
+        novel_id: novelId,
+        volume_id: volumeId,
+        extra_instruction: extraInstruction,
+      }),
+    generateChapterSegment: (
+      novelId: string,
+      chapterId: string,
+      segment: 'opening' | 'middle' | 'ending',
+      prevSegmentText: string,
+      extraInstruction?: string,
+    ) =>
+      runAiJob<{ content: string; full_content: string }>('/api/ai/generate/chapter-segment', {
+        novel_id: novelId,
+        chapter_id: chapterId,
+        segment,
+        prev_segment_text: prevSegmentText,
+        extra_instruction: extraInstruction,
+      }),
+    getJob: <T = any>(jobId: string) =>
+      http.get<AIGenerationJob<T>>(`/api/ai/jobs/${jobId}`).then(r => r.data),
   },
 
   volumes: {
@@ -88,119 +188,8 @@ export const api = {
 
   admin: {
     getWorkflowConfig: () =>
-      http.get<{ flow: Array<{ id: string; name: string; next: string }>; prompts: Record<string, string> }>('/api/admin/workflow-config').then(r => r.data),
-    updateWorkflowConfig: (data: { flow: Array<{ id: string; name: string; next: string }>; prompts: Record<string, string> }) =>
-      http.put<{ flow: Array<{ id: string; name: string; next: string }>; prompts: Record<string, string> }>('/api/admin/workflow-config', data).then(r => r.data),
+      http.get<WorkflowConfig>('/api/admin/workflow-config').then(r => r.data),
+    updateWorkflowConfig: (data: WorkflowConfig) =>
+      http.put<WorkflowConfig>('/api/admin/workflow-config', data).then(r => r.data),
   },
-}
-
-// SSE流式请求
-export function streamRequest(
-  url: string,
-  body: object,
-  onChunk: (text: string) => void,
-  onDone: () => void,
-  onError: (err: string) => void,
-): AbortController {
-  const ctrl = new AbortController()
-  fetch(`http://localhost:8000${url}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal: ctrl.signal,
-  }).then(async res => {
-    if (!res.ok) {
-      onError(`HTTP ${res.status}`)
-      return
-    }
-    const reader = res.body!.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue
-        const data = line.slice(6).trim()
-        if (data === '[DONE]') { onDone(); return }
-        try {
-          const parsed = JSON.parse(data)
-          if (parsed.error) { onError(parsed.error); return }
-          if (parsed.text) onChunk(parsed.text)
-        } catch { /* ignore */ }
-      }
-    }
-    onDone()
-  }).catch(err => {
-    if (err.name !== 'AbortError') onError(err.message)
-  })
-  return ctrl
-}
-
-// 生成整卷细纲（SSE）
-export function streamVolumeSynopsis(
-  novelId: string, volumeId: string, extraInstruction: string | undefined,
-  onChunk: (text: string) => void, onDone: () => void, onError: (err: string) => void,
-): AbortController {
-  return streamRequest(
-    '/api/ai/generate/volume-synopsis',
-    { novel_id: novelId, volume_id: volumeId, extra_instruction: extraInstruction },
-    onChunk, onDone, onError,
-  )
-}
-
-// 根据细纲生成角色（SSE）
-export function streamGenerateCharacters(
-  novelId: string,
-  onChunk: (text: string) => void, onDone: () => void, onError: (err: string) => void,
-): AbortController {
-  return streamRequest(
-    '/api/ai/generate/characters-from-synopsis',
-    { novel_id: novelId },
-    onChunk, onDone, onError,
-  )
-}
-
-// 根据大纲生成世界观（SSE）
-export function streamGenerateWorldbuilding(
-  novelId: string,
-  onChunk: (text: string) => void, onDone: () => void, onError: (err: string) => void,
-): AbortController {
-  return streamRequest(
-    '/api/ai/generate/worldbuilding',
-    { novel_id: novelId },
-    onChunk, onDone, onError,
-  )
-}
-
-// 分段生成正文（SSE）
-export function streamChapterSegment(
-  novelId: string, chapterId: string, segment: 'opening' | 'middle' | 'ending',
-  prevSegmentText: string,
-  onChunk: (text: string) => void, onDone: () => void, onError: (err: string) => void,
-): AbortController {
-  return streamRequest(
-    '/api/ai/generate/chapter-segment',
-    { novel_id: novelId, chapter_id: chapterId, segment, prev_segment_text: prevSegmentText },
-    onChunk, onDone, onError,
-  )
-}
-
-// AI对话（SSE）
-export function streamChat(
-  novelId: string,
-  contextType: string,
-  contextId: string | undefined,
-  messages: { role: string; content: string }[],
-  userMessage: string,
-  onChunk: (text: string) => void, onDone: () => void, onError: (err: string) => void,
-): AbortController {
-  return streamRequest(
-    '/api/ai/chat',
-    { novel_id: novelId, context_type: contextType, context_id: contextId, messages, user_message: userMessage },
-    onChunk, onDone, onError,
-  )
 }

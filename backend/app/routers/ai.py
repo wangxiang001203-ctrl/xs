@@ -5,7 +5,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal, get_db
-from app.models import AIGenerationJob, Character, Novel
+from app.models import AIGenerationJob, Character, Novel, ChapterMemory, EntityProposal
 from app.models.chapter import Chapter
 from app.models.project import Outline
 from app.models.synopsis import Synopsis
@@ -34,10 +34,19 @@ from app.services import ai_job_service, ai_service, context_builder
 from app.services.file_service import (
     save_book_meta,
     save_chapter_content,
+    save_chapter_plot_summary,
     save_chapter_synopsis,
     save_characters,
     save_synopsis,
+    save_volume_plan,
     save_worldbuilding,
+)
+from app.services.review_service import (
+    build_chapter_memory,
+    chapter_access_guard,
+    save_all_proposals,
+    serialize_proposal,
+    validate_and_prepare_proposals,
 )
 from app.services.validator import validate_synopsis_characters
 from app.services.workflow_config_service import get_workflow_config
@@ -51,6 +60,7 @@ from app.services.worldbuilding_service import (
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
 SYSTEM_NOVEL = "你是一位专业的玄幻/修仙小说作家，擅长构建宏大世界观、塑造鲜明人物、编写引人入胜的剧情。"
+DEFAULT_VOLUME_CHAPTER_COUNT = 12
 
 
 def _prompt_config() -> dict[str, str]:
@@ -275,6 +285,24 @@ def _serialize_chapter(chapter: Chapter) -> dict:
     return ChapterContentOut.model_validate(chapter).model_dump(mode="json")
 
 
+def _serialize_memory(memory: ChapterMemory) -> dict:
+    return {
+        "id": memory.id,
+        "novel_id": memory.novel_id,
+        "chapter_id": memory.chapter_id,
+        "chapter_number": memory.chapter_number,
+        "summary": memory.summary,
+        "key_events": memory.key_events or [],
+        "state_changes": memory.state_changes or [],
+        "inventory_changes": memory.inventory_changes or [],
+        "proposed_entities": memory.proposed_entities or [],
+        "open_threads": memory.open_threads or [],
+        "source_excerpt": memory.source_excerpt,
+        "created_at": memory.created_at,
+        "updated_at": memory.updated_at,
+    }
+
+
 def _get_latest_outline(db: Session, novel_id: str, outline_id: str | None = None) -> Outline:
     if outline_id:
         outline = db.query(Outline).filter(Outline.id == outline_id, Outline.novel_id == novel_id).first()
@@ -292,6 +320,50 @@ def _load_outline_struct(outline: Outline | None) -> dict:
         return json.loads(outline.main_plot)
     except Exception:
         return {}
+
+
+def _positive_int(value) -> int:
+    number = _safe_int(value, 0)
+    return number if number > 0 else 0
+
+
+def _extract_chapter_count_from_markdown(markdown: str | None) -> int:
+    if not markdown:
+        return 0
+    patterns = [
+        r"预计章节数\s*[：:]\s*(\d+)",
+        r"本卷共\s*(\d+)\s*章",
+        r"共\s*(\d+)\s*章",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, markdown)
+        if match:
+            count = _positive_int(match.group(1))
+            if count:
+                return count
+    return 0
+
+
+def _resolve_volume_target_count(volume: Volume, volume_spec: dict | None, existing_count: int) -> int:
+    plan_data = volume.plan_data or {}
+    candidates = [
+        volume.planned_chapter_count,
+        plan_data.get("chapter_count"),
+        plan_data.get("planned_chapter_count"),
+        (volume_spec or {}).get("chapter_count"),
+        _extract_chapter_count_from_markdown(volume.plan_markdown),
+    ]
+    for candidate in candidates:
+        count = _positive_int(candidate)
+        if count:
+            return max(count, existing_count)
+    return max(existing_count, DEFAULT_VOLUME_CHAPTER_COUNT)
+
+
+def _clean_chapter_title(chapter_number: int, title: str | None) -> str:
+    clean = _safe_text(title, f"第{chapter_number}章")
+    clean = re.sub(rf"^第\s*{chapter_number}\s*章\s*[：:、\-—]?\s*", "", clean).strip()
+    return clean or f"第{chapter_number}章"
 
 
 def _create_missing_characters(db: Session, novel_id: str, names: list[str]) -> list[str]:
@@ -333,8 +405,11 @@ def _ensure_volume_chapters(db: Session, novel_id: str, volume: Volume) -> list[
         ),
         None,
     )
-    target_count = max(_safe_int((volume_spec or {}).get("chapter_count"), len(chapters) or 0), len(chapters), 1)
+    target_count = _resolve_volume_target_count(volume, volume_spec, len(chapters))
+    if _positive_int(volume.planned_chapter_count) != target_count:
+        volume.planned_chapter_count = target_count
     if len(chapters) >= target_count:
+        db.commit()
         return chapters
 
     max_number = db.query(Chapter.chapter_number).filter(Chapter.novel_id == novel_id).order_by(Chapter.chapter_number.desc()).first()
@@ -354,6 +429,35 @@ def _ensure_volume_chapters(db: Session, novel_id: str, volume: Volume) -> list[
 
     db.commit()
     return db.query(Chapter).filter(Chapter.volume_id == volume.id).order_by(Chapter.chapter_number).all()
+
+
+def _build_volume_synopsis_markdown(db: Session, volume: Volume) -> str:
+    chapters = db.query(Chapter).filter(Chapter.volume_id == volume.id).order_by(Chapter.chapter_number).all()
+    parts = [
+        f"# 第{volume.volume_number}卷 {volume.title}",
+        "",
+        f"本卷共 {len(chapters)} 章。",
+        "",
+    ]
+    if volume.main_line:
+        parts.extend(["## 本卷主线", volume.main_line.strip(), ""])
+
+    parts.append("## 章节细纲")
+    parts.append("")
+    for chapter in chapters:
+        synopsis = db.query(Synopsis).filter(Synopsis.chapter_id == chapter.id).first()
+        default_title = f"第{chapter.chapter_number}章"
+        title = (chapter.title or "").strip()
+        heading = default_title if not title or title == default_title else f"{default_title} {title}"
+        parts.append(f"### {heading}")
+        if synopsis and synopsis.content_md:
+            parts.append(synopsis.content_md.strip())
+        elif synopsis and synopsis.summary_line:
+            parts.append(synopsis.summary_line.strip())
+        else:
+            parts.append("（待生成）")
+        parts.append("")
+    return "\n".join(parts).strip()
 
 
 def _combine_segment_content(base_content: str, segment: str, generated_text: str) -> str:
@@ -617,12 +721,18 @@ async def _execute_chapter_synopsis_job(db: Session, payload: dict, job_id: str)
     development = data.get("development", {})
     ending = data.get("ending", {})
     all_chars = list(set(opening.get("characters", []) + development.get("characters", [])))
-
-    validation = validate_synopsis_characters(db, payload["novel_id"], all_chars)
-    auto_created: list[str] = []
-    if not validation["valid"]:
-        auto_created = _create_missing_characters(db, payload["novel_id"], validation["missing"])
-        db.commit()
+    referenced_entities = data.get("referenced_entities") or {}
+    if not referenced_entities.get("characters"):
+        referenced_entities["characters"] = all_chars
+    proposal_candidates = data.get("proposal_candidates") or []
+    missing_entities, created_proposals = validate_and_prepare_proposals(
+        db,
+        payload["novel_id"],
+        referenced_entities,
+        proposal_candidates,
+        chapter_id=payload["chapter_id"],
+        volume_id=chapter.volume_id,
+    )
 
     synopsis = db.query(Synopsis).filter(Synopsis.chapter_id == payload["chapter_id"]).first()
     if not synopsis:
@@ -641,20 +751,35 @@ async def _execute_chapter_synopsis_job(db: Session, payload: dict, job_id: str)
     synopsis.ending_next_hook = ending.get("next_chapter_hook", "")
     synopsis.all_characters = all_chars
     synopsis.word_count_target = data.get("word_count_target", 3000)
+    synopsis.summary_line = data.get("summary_line", "")
+    synopsis.content_md = data.get("content_md", "")
+    synopsis.hard_constraints = data.get("hard_constraints") or []
+    synopsis.referenced_entities = referenced_entities
+    synopsis.review_status = "needs_review" if created_proposals else "draft"
+    synopsis.approved_at = None
     synopsis.plot_summary_update = data.get("plot_summary_update", "")
     db.commit()
     db.refresh(synopsis)
     save_chapter_synopsis(payload["novel_id"], chapter.chapter_number, _serialize_synopsis(synopsis))
-    if auto_created:
-        all_characters = db.query(Character).filter(Character.novel_id == payload["novel_id"]).all()
-        save_characters(payload["novel_id"], _serialize_characters(all_characters))
-    return {"status": "ok", "auto_created_characters": auto_created}
+    save_chapter_plot_summary(payload["novel_id"], chapter.chapter_number, synopsis.plot_summary_update or "")
+    if created_proposals:
+        save_all_proposals(db, payload["novel_id"])
+    return {
+        "status": "ok",
+        "summary_line": synopsis.summary_line,
+        "missing_entities": missing_entities,
+        "pending_proposals": [serialize_proposal(item) for item in created_proposals],
+    }
 
 
 async def _execute_full_chapter_job(db: Session, payload: dict, job_id: str) -> dict:
     chapter = db.query(Chapter).filter(Chapter.id == payload["chapter_id"], Chapter.novel_id == payload["novel_id"]).first()
     if not chapter:
         raise HTTPException(404, "章节不存在")
+
+    guard = chapter_access_guard(db, chapter)
+    if not guard["ok"]:
+        raise HTTPException(400, guard["reason"])
 
     prompt = context_builder.build_chapter_context(db, payload["novel_id"], payload["chapter_id"])
     if payload.get("extra_instruction"):
@@ -687,7 +812,7 @@ async def _execute_volume_synopsis_job(db: Session, payload: dict, job_id: str) 
 
     chapters = _ensure_volume_chapters(db, payload["novel_id"], volume)
     ch_map = {c.chapter_number: c for c in chapters}
-    auto_created_characters: list[str] = []
+    created_proposals: list[EntityProposal] = []
     batch_size = 8
 
     for start in range(0, len(chapters), batch_size):
@@ -710,7 +835,7 @@ async def _execute_volume_synopsis_job(db: Session, payload: dict, job_id: str) 
         synopsis_list = json.loads(_extract_json(full_text))
 
         for item in synopsis_list:
-            ch_num = item.get("chapter_number")
+            ch_num = _safe_int(item.get("chapter_number"), 0)
             ch = ch_map.get(ch_num)
             if not ch:
                 continue
@@ -718,9 +843,18 @@ async def _execute_volume_synopsis_job(db: Session, payload: dict, job_id: str) 
             development = item.get("development", {})
             ending = item.get("ending", {})
             all_chars = list(set(opening.get("characters", []) + development.get("characters", [])))
-            validation = validate_synopsis_characters(db, payload["novel_id"], all_chars)
-            if not validation["valid"]:
-                auto_created_characters.extend(_create_missing_characters(db, payload["novel_id"], validation["missing"]))
+            referenced_entities = item.get("referenced_entities") or {}
+            if not referenced_entities.get("characters"):
+                referenced_entities["characters"] = all_chars
+            _, proposals = validate_and_prepare_proposals(
+                db,
+                payload["novel_id"],
+                referenced_entities,
+                item.get("proposal_candidates") or [],
+                chapter_id=ch.id,
+                volume_id=payload["volume_id"],
+            )
+            created_proposals.extend(proposals)
 
             existing = db.query(Synopsis).filter(Synopsis.chapter_id == ch.id).first()
             if not existing:
@@ -739,13 +873,21 @@ async def _execute_volume_synopsis_job(db: Session, payload: dict, job_id: str) 
             existing.ending_next_hook = ending.get("next_chapter_hook", "")
             existing.all_characters = all_chars
             existing.word_count_target = item.get("word_count_target", 3000)
+            existing.summary_line = item.get("summary_line", "")
+            existing.content_md = item.get("content_md", "")
+            existing.hard_constraints = item.get("hard_constraints") or []
+            existing.referenced_entities = referenced_entities
+            existing.review_status = "needs_review" if proposals else "draft"
+            existing.approved_at = None
             existing.plot_summary_update = item.get("plot_summary_update", "")
             if item.get("title"):
-                ch.title = item["title"]
+                ch.title = _clean_chapter_title(ch.chapter_number, item.get("title"))
 
         db.commit()
 
     volume.synopsis_generated = True
+    volume.review_status = "draft"
+    volume.approved_at = None
     db.commit()
 
     refreshed_chapters = db.query(Chapter).filter(Chapter.volume_id == payload["volume_id"]).order_by(Chapter.chapter_number).all()
@@ -753,13 +895,20 @@ async def _execute_volume_synopsis_job(db: Session, payload: dict, job_id: str) 
         synopsis = db.query(Synopsis).filter(Synopsis.chapter_id == ch.id).first()
         if synopsis:
             save_chapter_synopsis(payload["novel_id"], ch.chapter_number, _serialize_synopsis(synopsis))
-    if auto_created_characters:
-        all_characters = db.query(Character).filter(Character.novel_id == payload["novel_id"]).all()
-        save_characters(payload["novel_id"], _serialize_characters(all_characters))
+            save_chapter_plot_summary(payload["novel_id"], ch.chapter_number, synopsis.plot_summary_update or "")
+    volume.plan_markdown = _build_volume_synopsis_markdown(db, volume)
+    volume.plan_data = {
+        **(volume.plan_data or {}),
+        "synopsis_chapter_count": len(refreshed_chapters),
+    }
+    db.commit()
+    save_volume_plan(payload["novel_id"], volume.volume_number, volume.plan_markdown or "", volume.plan_data or {})
+    if created_proposals:
+        save_all_proposals(db, payload["novel_id"])
     return {
         "status": "ok",
         "chapter_count": len(refreshed_chapters),
-        "auto_created_characters": sorted(set(auto_created_characters)),
+        "pending_proposals": [serialize_proposal(item) for item in created_proposals],
     }
 
 
@@ -918,6 +1067,10 @@ async def _execute_chapter_segment_job(db: Session, payload: dict, job_id: str) 
     if not chapter:
         raise HTTPException(404, "章节不存在")
 
+    guard = chapter_access_guard(db, chapter)
+    if not guard["ok"]:
+        raise HTTPException(400, guard["reason"])
+
     base_content = chapter.content or ""
     prompt = context_builder.build_chapter_segment_context(
         db,
@@ -1058,6 +1211,15 @@ def get_job_status(job_id: str, db: Session = Depends(get_db)):
     return ai_job_service.to_response(job)
 
 
+@router.get("/jobs")
+def list_jobs(novel_id: str, limit: int = 20, db: Session = Depends(get_db)):
+    safe_limit = max(min(limit, 100), 1)
+    jobs = db.query(AIGenerationJob).filter(
+        AIGenerationJob.novel_id == novel_id
+    ).order_by(AIGenerationJob.created_at.desc()).limit(safe_limit).all()
+    return [ai_job_service.to_response(item) for item in jobs]
+
+
 @router.post("/generate/outline", response_model=AIGenerationJobOut)
 async def generate_outline(
     req: GenerateOutlineRequest,
@@ -1121,12 +1283,7 @@ async def generate_synopsis(
 
 @router.post("/synopsis/create-missing-characters")
 def create_missing_characters(req: CreateMissingCharactersRequest, db: Session = Depends(get_db)):
-    created = _create_missing_characters(db, req.novel_id, req.missing_names)
-    db.commit()
-    if created:
-        all_characters = db.query(Character).filter(Character.novel_id == req.novel_id).all()
-        save_characters(req.novel_id, _serialize_characters(all_characters))
-    return {"created": created}
+    raise HTTPException(410, "已停用自动补录角色，请通过待审阅提案手动确认新增角色")
 
 
 @router.post("/generate/chapter", response_model=AIGenerationJobOut)

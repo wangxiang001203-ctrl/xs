@@ -80,6 +80,20 @@
   font-size: 13px;
 }
 
+.editorTextarea {
+  height: 100% !important;
+  min-height: 420px !important;
+  padding: 16px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  resize: none !important;
+  background: transparent !important;
+  color: var(--text-primary) !important;
+  font-size: 15px !important;
+  line-height: 1.9 !important;
+  box-shadow: none !important;
+}
+
 .preview {
   flex: 1;
   overflow-y: auto;

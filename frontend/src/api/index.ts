@@ -2,11 +2,14 @@ import axios from 'axios'
 import type {
   AIGenerationJob,
   Chapter,
+  ChapterMemory,
   Character,
+  EntityProposal,
   Novel,
   Outline,
   Synopsis,
   Volume,
+  VolumeWorkspace,
   WorkflowConfig,
   Worldbuilding,
 } from '../types'
@@ -129,7 +132,13 @@ export const api = {
         (payload) => payload?.characters || [],
       ),
     generateSynopsis: (payload: { novel_id: string; chapter_id: string; chapter_number: number; extra_instruction?: string }) =>
-      runAiJob<{ status: string; auto_created_characters?: string[] }>('/api/ai/generate/synopsis', payload),
+      runAiJob<{ status: string; summary_line?: string; missing_entities?: Record<string, string[]>; pending_proposals?: EntityProposal[] }>('/api/ai/generate/synopsis', payload),
+    generateChapter: (novelId: string, chapterId: string, extraInstruction?: string) =>
+      runAiJob<Chapter>('/api/ai/generate/chapter', {
+        novel_id: novelId,
+        chapter_id: chapterId,
+        extra_instruction: extraInstruction,
+      }),
     validateCharacters: (novelId: string, names: string[]) =>
       http.post<{ valid: boolean; missing: string[] }>('/api/ai/validate/synopsis-characters', {
         novel_id: novelId,
@@ -151,7 +160,7 @@ export const api = {
         extra_instruction: extraInstruction,
       }),
     generateVolumeSynopsis: (novelId: string, volumeId: string, extraInstruction?: string) =>
-      runAiJob<{ status: string; chapter_count?: number; auto_created_characters?: string[] }>('/api/ai/generate/volume-synopsis', {
+      runAiJob<{ status: string; chapter_count?: number; pending_proposals?: EntityProposal[] }>('/api/ai/generate/volume-synopsis', {
         novel_id: novelId,
         volume_id: volumeId,
         extra_instruction: extraInstruction,
@@ -172,6 +181,16 @@ export const api = {
       }),
     getJob: <T = any>(jobId: string) =>
       http.get<AIGenerationJob<T>>(`/api/ai/jobs/${jobId}`).then(r => r.data),
+    listJobs: <T = any>(novelId: string, limit = 20) =>
+      http.get<AIGenerationJob<T>[]>('/api/ai/jobs', { params: { novel_id: novelId, limit } }).then(r => r.data),
+    chat: (payload: {
+      novel_id: string
+      context_type: string
+      context_id?: string | null
+      messages: Array<{ role: string; content: string }>
+      user_message: string
+    }) =>
+      runAiJob<{ message: string }>('/api/ai/chat', payload),
   },
 
   volumes: {
@@ -184,6 +203,31 @@ export const api = {
       http.delete(`/api/projects/${novelId}/volumes/${volumeId}`).then(r => r.data),
     assignChapter: (novelId: string, volumeId: string, chapterId: string) =>
       http.post(`/api/projects/${novelId}/volumes/${volumeId}/assign-chapter/${chapterId}`).then(r => r.data),
+    workspace: (novelId: string, volumeId: string) =>
+      http.get<VolumeWorkspace>(`/api/projects/${novelId}/volumes/${volumeId}/workspace`).then(r => r.data),
+    approve: (novelId: string, volumeId: string) =>
+      http.post<Volume>(`/api/projects/${novelId}/volumes/${volumeId}/approve`).then(r => r.data),
+  },
+
+  review: {
+    listProposals: (novelId: string, params?: { status?: string; chapterId?: string; volumeId?: string }) =>
+      http.get<EntityProposal[]>(`/api/projects/${novelId}/review/proposals`, {
+        params: {
+          status: params?.status,
+          chapter_id: params?.chapterId,
+          volume_id: params?.volumeId,
+        },
+      }).then(r => r.data),
+    approveProposal: (novelId: string, proposalId: string, note?: string) =>
+      http.post<EntityProposal>(`/api/projects/${novelId}/review/proposals/${proposalId}/approve`, { note }).then(r => r.data),
+    rejectProposal: (novelId: string, proposalId: string, note?: string) =>
+      http.post<EntityProposal>(`/api/projects/${novelId}/review/proposals/${proposalId}/reject`, { note }).then(r => r.data),
+    approveSynopsis: (novelId: string, chapterId: string) =>
+      http.post<Synopsis>(`/api/projects/${novelId}/review/chapters/${chapterId}/approve-synopsis`).then(r => r.data),
+    approveFinalChapter: (novelId: string, chapterId: string) =>
+      http.post<Chapter>(`/api/projects/${novelId}/review/chapters/${chapterId}/approve-final`).then(r => r.data),
+    getChapterMemory: (novelId: string, chapterId: string) =>
+      http.get<ChapterMemory>(`/api/projects/${novelId}/review/chapters/${chapterId}/memory`).then(r => r.data),
   },
 
   admin: {

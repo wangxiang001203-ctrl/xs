@@ -6,15 +6,23 @@ from app.schemas.chapter import (
     ChapterCreate, ChapterUpdate, ChapterOut, ChapterContentOut,
     SynopsisCreate, SynopsisOut,
 )
-from app.services.file_service import save_chapter_content, save_chapter_synopsis, append_plot_summary
-from app.services.validator import validate_synopsis_characters
+from app.services.file_service import save_chapter_content, save_chapter_plot_summary, save_chapter_synopsis
+from app.services.validator import validate_story_entities, validate_synopsis_characters
 
 router = APIRouter(prefix="/api/projects/{novel_id}/chapters", tags=["chapters"])
 
 
+def _normalize_chapter_defaults(chapter: Chapter):
+    if chapter.final_approved is None:
+        chapter.final_approved = False
+
+
 @router.get("", response_model=list[ChapterOut])
 def list_chapters(novel_id: str, db: Session = Depends(get_db)):
-    return db.query(Chapter).filter(Chapter.novel_id == novel_id).order_by(Chapter.chapter_number).all()
+    chapters = db.query(Chapter).filter(Chapter.novel_id == novel_id).order_by(Chapter.chapter_number).all()
+    for chapter in chapters:
+        _normalize_chapter_defaults(chapter)
+    return chapters
 
 
 @router.post("", response_model=ChapterOut)
@@ -38,6 +46,7 @@ def get_chapter(novel_id: str, chapter_id: str, db: Session = Depends(get_db)):
     ).first()
     if not chapter:
         raise HTTPException(404, "章节不存在")
+    _normalize_chapter_defaults(chapter)
     return chapter
 
 
@@ -56,14 +65,11 @@ def update_chapter(novel_id: str, chapter_id: str, data: ChapterUpdate, db: Sess
         update_data["word_count"] = len(update_data["content"])
         save_chapter_content(novel_id, chapter.chapter_number, update_data["content"])
 
-    # 完成章节时追加主线剧情
-    if update_data.get("status") == "completed" and chapter.plot_summary:
-        append_plot_summary(novel_id, chapter.chapter_number, chapter.title or "", chapter.plot_summary)
-
     for k, v in update_data.items():
         setattr(chapter, k, v)
     db.commit()
     db.refresh(chapter)
+    _normalize_chapter_defaults(chapter)
     return chapter
 
 
@@ -105,6 +111,20 @@ def upsert_synopsis(
             422,
             f"细纲中存在未定义角色：{', '.join(validation['missing'])}，请先在角色库中创建"
         )
+    entity_refs = data.referenced_entities or {}
+    if all_chars and not entity_refs.get("characters"):
+        entity_refs["characters"] = all_chars
+    entity_validation = validate_story_entities(db, novel_id, entity_refs)
+    missing_non_characters = []
+    for key, values in entity_validation.items():
+        if key == "characters":
+            continue
+        missing_non_characters.extend(values)
+    if missing_non_characters:
+        raise HTTPException(
+            422,
+            f"细纲中引用了未入库设定：{', '.join(missing_non_characters)}，请先通过提案补录或修改细纲"
+        )
 
     synopsis = db.query(Synopsis).filter(Synopsis.chapter_id == chapter_id).first()
     if not synopsis:
@@ -116,6 +136,8 @@ def upsert_synopsis(
 
     # 汇总所有出场人物
     synopsis.all_characters = list(set(all_chars))
+    synopsis.review_status = data.review_status or synopsis.review_status or "draft"
+    synopsis.referenced_entities = entity_refs
 
     db.commit()
     db.refresh(synopsis)
@@ -124,4 +146,5 @@ def upsert_synopsis(
     ).first()
     if chapter:
         save_chapter_synopsis(novel_id, chapter.chapter_number, SynopsisOut.model_validate(synopsis).model_dump(mode="json"))
+        save_chapter_plot_summary(novel_id, chapter.chapter_number, synopsis.plot_summary_update or "")
     return synopsis

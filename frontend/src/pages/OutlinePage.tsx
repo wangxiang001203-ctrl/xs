@@ -1,9 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Button, Input, Alert, Spin, message, Tag, Radio, Space, Modal } from 'antd'
 import { ThunderboltOutlined, CheckOutlined, EditOutlined } from '@ant-design/icons'
-import CodeMirror from '@uiw/react-codemirror'
-import { markdown } from '@codemirror/lang-markdown'
-import { EditorView } from '@codemirror/view'
 import { api } from '../api'
 import { useAppStore } from '../store'
 import type { Outline } from '../types'
@@ -253,7 +250,7 @@ export default function OutlinePage() {
                 size="small" icon={<EditOutlined />}
                 onClick={() => { setEditing(true); setEditContent(editContent || outline.content || '') }}
               >
-                编辑源码
+                编辑大纲
               </Button>
             )}
             {editing && (
@@ -288,12 +285,11 @@ export default function OutlinePage() {
 
         {outline ? (
           editing ? (
-            <CodeMirror
+            <TextArea
               value={editContent}
-              onChange={setEditContent}
-              extensions={[markdown(), EditorView.lineWrapping]}
-              theme="dark"
-              className={styles.editor}
+              onChange={event => setEditContent(event.target.value)}
+              autoSize={false}
+              className={`${styles.editor} ${styles.editorTextarea}`}
             />
           ) : (
             <div className={styles.preview}>
@@ -303,7 +299,7 @@ export default function OutlinePage() {
         ) : (
           !generating && (
             <div className={styles.emptyEditor}>
-              <span>输入创意后点击「AI推演企划」</span>
+              <span>输入创意后点击「AI生成大纲」</span>
             </div>
           )
         )}

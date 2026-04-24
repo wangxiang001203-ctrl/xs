@@ -116,12 +116,26 @@ def _sync_volumes_from_outline(novel_id: str, outline_struct: dict, db: Session)
             if chapter_counts.get(volume.id, 0) == 0:
                 volume.title = title
                 volume.description = description
+                volume.target_words = _safe_int(item.get("target_words"), 30000)
+                volume.planned_chapter_count = _safe_int(item.get("chapter_count"), 12)
+                volume.main_line = _safe_text(item.get("main_line"), "待补充")
+                volume.character_arc = _safe_text(item.get("character_arc"), "待补充")
+                volume.ending_hook = _safe_text(item.get("ending_hook"), "待补充")
+                volume.plan_markdown = _volume_plan_markdown(item)
+                volume.plan_data = item
         else:
             volume = Volume(
                 novel_id=novel_id,
                 volume_number=volume_no,
                 title=title,
                 description=description,
+                target_words=_safe_int(item.get("target_words"), 30000),
+                planned_chapter_count=_safe_int(item.get("chapter_count"), 12),
+                main_line=_safe_text(item.get("main_line"), "待补充"),
+                character_arc=_safe_text(item.get("character_arc"), "待补充"),
+                ending_hook=_safe_text(item.get("ending_hook"), "待补充"),
+                plan_markdown=_volume_plan_markdown(item),
+                plan_data=item,
             )
             db.add(volume)
 

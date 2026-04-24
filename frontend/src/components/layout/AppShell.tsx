@@ -24,7 +24,7 @@ export default function AppShell({ children }: Props) {
       </Content>
 
       {/* 右侧上下文面板 */}
-      <Sider width={240} className={styles.right}>
+      <Sider width={320} className={styles.right}>
         <RightPanel />
       </Sider>
     </Layout>

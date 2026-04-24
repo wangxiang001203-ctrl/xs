@@ -3,7 +3,7 @@ AI上下文构建器 — 核心模块
 负责为每次AI调用组装最优上下文，平衡信息完整性与token消耗
 """
 from sqlalchemy.orm import Session
-from app.models import Novel, Character, Chapter, Synopsis
+from app.models import Novel, Character, Chapter, Synopsis, ChapterMemory
 from app.models.worldbuilding import Worldbuilding
 from app.models.project import Outline
 from app.models.volume import Volume
@@ -87,12 +87,36 @@ def build_synopsis_context(db: Session, novel_id: str, chapter_number: int) -> s
         )
 
     parts.append(f"""## 任务
-请为第{chapter_number}章生成细纲，必须包含以下JSON结构：
+请为第{chapter_number}章生成完整细纲，必须包含以下JSON结构：
 
 ```json
 {{
   "title": "章节标题",
+  "summary_line": "本章一句话概括",
   "word_count_target": 3000,
+  "content_md": "# 第{chapter_number}章 章节标题\\n\\n## 本章目标\\n...\\n\\n## 情节推进\\n1. ...\\n\\n## 角色与状态\\n- ...\\n\\n## 本章约束\\n- ...\\n\\n## 章末钩子\\n...",
+  "hard_constraints": ["硬约束1", "硬约束2"],
+  "referenced_entities": {{
+    "characters": ["角色名"],
+    "items": ["道具名"],
+    "factions": ["势力名"],
+    "locations": ["地点名"],
+    "rules": ["规则名"],
+    "realms": ["境界名"]
+  }},
+  "proposal_candidates": [
+    {{
+      "entity_type": "item",
+      "name": "新道具名",
+      "reason": "为什么首次出现它是合理的",
+      "target_section": "items",
+      "entry": {{
+        "name": "新道具名",
+        "summary": "一句话定义",
+        "details": "详细说明"
+      }}
+    }}
+  ],
   "opening": {{
     "scene": "开场场景描述",
     "mood": "基调/氛围",
@@ -114,8 +138,10 @@ def build_synopsis_context(db: Session, novel_id: str, chapter_number: int) -> s
 ```
 
 注意：
-1. 优先使用已有角色列表中的人物名
-2. 如果确实需要新增临时人物，可以直接写人物名，系统会在后续流程中补录角色卡""")
+1. 细纲正文请写在 content_md 中，给作者直接阅读和修改
+2. 优先使用已有角色列表、世界观设定中的实体
+3. 如果确实首次出现新人物/新道具/新规则，不得当作已存在事实直接写死，必须放入 proposal_candidates 等待作者审批
+4. referenced_entities 必须只填写本章真正用到的实体""")
 
     return "\n".join(parts)
 
@@ -147,6 +173,11 @@ def build_chapter_context(db: Session, novel_id: str, chapter_id: str) -> str:
             Chapter.chapter_number == chapter.chapter_number - 1,
         ).first()
 
+    recent_memories = db.query(ChapterMemory).filter(
+        ChapterMemory.novel_id == novel_id,
+        ChapterMemory.chapter_number < (chapter.chapter_number if chapter else 1),
+    ).order_by(ChapterMemory.chapter_number.desc()).limit(3).all()
+
     parts = [f"# 小说：{novel.title}\n"]
 
     if worldbuilding:
@@ -161,8 +192,19 @@ def build_chapter_context(db: Session, novel_id: str, chapter_id: str) -> str:
         tail = prev_chapter.content[-500:]
         parts.append(f"## 上一章结尾（保持文风衔接）\n...{tail}\n")
 
+    if recent_memories:
+        recent_memories.reverse()
+        memory_lines = []
+        for item in recent_memories:
+            summary = item.summary or "待补充"
+            memory_lines.append(f"- 第{item.chapter_number}章：{summary}")
+        parts.append(f"## 近期动态记忆\n" + "\n".join(memory_lines) + "\n")
+
     if synopsis:
-        parts.append(f"""## 本章细纲
+        if synopsis.content_md:
+            parts.append(f"## 本章细纲\n{synopsis.content_md}\n")
+        else:
+            parts.append(f"""## 本章细纲
 **标题**：{chapter.title or f'第{chapter.chapter_number}章'}
 **目标字数**：{synopsis.word_count_target}字
 
@@ -291,7 +333,31 @@ def build_volume_synopsis_context(
   {{
     "chapter_number": 1,
     "title": "章节标题",
+    "summary_line": "这一章一句话在干什么",
     "word_count_target": 3000,
+    "content_md": "本章目标：...\\n\\n剧情推进：...\\n\\n角色与状态：...\\n\\n硬性约束：...\\n\\n章末钩子：...",
+    "hard_constraints": ["硬约束1"],
+    "referenced_entities": {{
+      "characters": ["角色名"],
+      "items": ["道具名"],
+      "factions": ["势力名"],
+      "locations": ["地点名"],
+      "rules": ["规则名"],
+      "realms": ["境界名"]
+    }},
+    "proposal_candidates": [
+      {{
+        "entity_type": "item",
+        "name": "新道具名",
+        "reason": "首次出现合理性",
+        "target_section": "items",
+        "entry": {{
+          "name": "新道具名",
+          "summary": "一句话定义",
+          "details": "详细说明"
+        }}
+      }}
+    ],
     "opening": {{
       "scene": "开场场景",
       "mood": "基调氛围",
@@ -317,8 +383,9 @@ def build_volume_synopsis_context(
 1. 数组长度必须等于本次章节数（{len(chapters)}章）
 2. chapter_number 与章节列表一一对应
 3. 章节间剧情要连贯，前一章的 next_chapter_hook 要与下一章的 opening 呼应
-4. 优先使用角色列表中的人物；如果剧情确实需要新增临时人物，可以直接写人物名，系统会后补角色占位
-5. 只输出JSON，不要输出任何说明文字""")
+4. 优先使用已有角色和世界观实体；如果确需首次出现新实体，必须放进 proposal_candidates，等待作者审批
+5. content_md 是给作者读和改的整章细纲，必须是一整块 Markdown 文本；不要再写“第X章”标题，标题只放在 title 字段
+6. 只输出JSON，不要输出任何说明文字""")
 
     return "\n".join(parts)
 
@@ -497,14 +564,19 @@ def build_chapter_segment_context(db: Session, novel_id: str, chapter_id: str, s
         tail = prev_segment_text[-300:]
         parts.append(f"## 上一段结尾（直接续写）\n...{tail}\n")
 
+    if recent_memories:
+        recent_memories.reverse()
+        memory_lines = [f"- 第{item.chapter_number}章：{item.summary or '待补充'}" for item in recent_memories]
+        parts.append("## 近期动态记忆\n" + "\n".join(memory_lines) + "\n")
+
     if synopsis:
-        seg_detail = ""
+        seg_detail = synopsis.content_md or ""
         if segment == "opening":
-            seg_detail = f"场景：{synopsis.opening_scene}\n基调：{synopsis.opening_mood}\n钩子：{synopsis.opening_hook}"
+            seg_detail = seg_detail or f"场景：{synopsis.opening_scene}\n基调：{synopsis.opening_mood}\n钩子：{synopsis.opening_hook}"
         elif segment == "middle":
-            seg_detail = f"事件：{', '.join(synopsis.development_events or [])}\n冲突：{', '.join(synopsis.development_conflicts or [])}"
+            seg_detail = seg_detail or f"事件：{', '.join(synopsis.development_events or [])}\n冲突：{', '.join(synopsis.development_conflicts or [])}"
         elif segment == "ending":
-            seg_detail = f"结局：{synopsis.ending_resolution}\n悬念：{synopsis.ending_cliffhanger}\n下章钩子：{synopsis.ending_next_hook}"
+            seg_detail = seg_detail or f"结局：{synopsis.ending_resolution}\n悬念：{synopsis.ending_cliffhanger}\n下章钩子：{synopsis.ending_next_hook}"
 
         parts.append(f"## 本段细纲\n{seg_detail}\n")
 

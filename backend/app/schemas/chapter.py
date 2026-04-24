@@ -13,16 +13,22 @@ class ChapterUpdate(BaseModel):
     content: Optional[str] = None
     plot_summary: Optional[str] = None
     status: Optional[str] = None
+    final_approved: Optional[bool] = None
+    final_approval_note: Optional[str] = None
 
 
 class ChapterOut(BaseModel):
     id: str
     novel_id: str
+    volume_id: Optional[str] = None
     chapter_number: int
     title: Optional[str]
     word_count: int
     plot_summary: Optional[str]
     status: str
+    final_approved: bool = False
+    final_approval_note: Optional[str] = None
+    final_approved_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
@@ -34,6 +40,8 @@ class ChapterContentOut(ChapterOut):
 
 
 class SynopsisCreate(BaseModel):
+    summary_line: Optional[str] = None
+    content_md: Optional[str] = None
     opening_scene: Optional[str] = None
     opening_mood: Optional[str] = None
     opening_hook: Optional[str] = None
@@ -46,6 +54,9 @@ class SynopsisCreate(BaseModel):
     ending_next_hook: Optional[str] = None
     all_characters: list = []
     word_count_target: int = 3000
+    hard_constraints: list = []
+    referenced_entities: dict = {}
+    review_status: Optional[str] = None
     plot_summary_update: Optional[str] = None
 
 
@@ -53,5 +64,6 @@ class SynopsisOut(SynopsisCreate):
     id: str
     chapter_id: str
     novel_id: str
+    approved_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}

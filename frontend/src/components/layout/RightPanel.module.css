@@ -1,7 +1,8 @@
 .panel {
   height: 100%;
-  overflow-y: auto;
-  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .header {
@@ -13,62 +14,145 @@
   border-bottom: 1px solid var(--border);
 }
 
-.section {
-  border-bottom: 1px solid var(--border);
-  padding: 8px 0;
+.toolbar {
+  padding: 10px 12px 0;
 }
 
-.sectionTitle {
-  padding: 2px 12px 6px;
-  font-size: 11px;
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.sectionBody {
-  padding: 0 12px;
-}
-
-.realmList {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.realmTag {
-  display: inline-block;
-  padding: 1px 5px;
-  border-radius: 2px;
-  font-size: 10px;
-  background: rgba(201, 168, 76, 0.1);
-  color: var(--accent);
-  border: 1px solid rgba(201, 168, 76, 0.25);
-}
-
-.charRow {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 3px 0;
-  font-size: 12px;
-}
-
-.charName {
-  color: var(--text-primary);
-}
-
-.charRealm {
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
+.loading,
 .empty {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 100%;
+  flex: 1;
   color: var(--text-muted);
   font-size: 12px;
-  padding: 20px;
+  padding: 16px;
   text-align: center;
+}
+
+.sectionBody {
+  padding: 12px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.muted {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.listItem {
+  align-items: flex-start !important;
+}
+
+.fileName {
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.divider {
+  margin: 4px 0 !important;
+}
+
+.gates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.reviewItem {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch !important;
+}
+
+.reviewHeader {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.reviewName {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.reviewReason {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.logItem {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch !important;
+}
+
+.logHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.logMessage {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.logError {
+  color: var(--error);
+  font-size: 12px;
+}
+
+.chatPane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.chatList {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.userBubble,
+.assistantBubble {
+  padding: 10px 12px;
+  border-radius: 10px;
+  white-space: pre-wrap;
+  line-height: 1.6;
+  font-size: 12px;
+}
+
+.userBubble {
+  align-self: flex-end;
+  background: rgba(201, 168, 76, 0.16);
+  color: var(--text-primary);
+}
+
+.assistantBubble {
+  align-self: stretch;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+.chatComposer {
+  border-top: 1px solid var(--border);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }

@@ -155,20 +155,33 @@ export interface Volume {
   volume_number: number
   title: string
   description?: string
+  target_words: number
+  planned_chapter_count: number
+  main_line?: string
+  character_arc?: string
+  ending_hook?: string
+  plan_markdown?: string
+  plan_data?: Record<string, any>
   synopsis_generated: boolean
+  review_status: string
+  approved_at?: string | null
   created_at: string
+  chapter_count?: number
 }
 
 export interface Chapter {
   id: string
   novel_id: string
-  volume_id?: string
+  volume_id?: string | null
   chapter_number: number
   title?: string
   content?: string
   word_count: number
   plot_summary?: string
   status: 'draft' | 'writing' | 'completed'
+  final_approved: boolean
+  final_approval_note?: string
+  final_approved_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -177,6 +190,8 @@ export interface Synopsis {
   id: string
   chapter_id: string
   novel_id: string
+  summary_line?: string
+  content_md?: string
   opening_scene?: string
   opening_mood?: string
   opening_hook?: string
@@ -189,7 +204,61 @@ export interface Synopsis {
   ending_next_hook?: string
   all_characters: string[]
   word_count_target: number
+  hard_constraints?: string[]
+  referenced_entities?: Record<string, string[]>
+  review_status?: string
+  approved_at?: string | null
   plot_summary_update?: string
+}
+
+export interface ChapterMemory {
+  id: string
+  novel_id: string
+  chapter_id: string
+  chapter_number: number
+  summary?: string
+  key_events: string[]
+  state_changes: string[]
+  inventory_changes: string[]
+  proposed_entities: Array<{ type: string; name: string }>
+  open_threads: string[]
+  source_excerpt?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface EntityProposal {
+  id: string
+  novel_id: string
+  chapter_id?: string | null
+  volume_id?: string | null
+  entity_type: string
+  action: string
+  entity_name: string
+  status: string
+  reason?: string
+  payload?: Record<string, any>
+  created_at: string
+  updated_at: string
+  resolved_at?: string | null
+}
+
+export interface VolumeWorkspace {
+  volume: Volume
+  volume_synopsis_markdown?: string
+  chapters: Array<{
+    id: string
+    chapter_number: number
+    title?: string
+    status: string
+    final_approved: boolean
+    synopsis_review_status: string
+    summary_line?: string
+    plot_summary_update?: string
+    content_md?: string
+    content_preview?: string
+  }>
+  pending_proposals: EntityProposal[]
 }
 
 export interface ModelCatalogItem {

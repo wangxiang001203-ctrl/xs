@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Text, Integer, Enum, DateTime, ForeignKey
+from sqlalchemy import String, Text, Integer, Enum, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -28,6 +28,9 @@ class Chapter(Base):
     status: Mapped[str] = mapped_column(
         Enum("draft", "writing", "completed"), default="draft", comment="章节状态"
     )
+    final_approved: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已人工定稿")
+    final_approval_note: Mapped[str | None] = mapped_column(Text, comment="定稿备注")
+    final_approved_at: Mapped[datetime | None] = mapped_column(DateTime, comment="定稿时间")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, comment="创建时间")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, comment="更新时间"

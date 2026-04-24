@@ -1,0 +1,208 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.meta {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  align-items: center;
+}
+
+.alert {
+  margin: 12px 16px 0;
+}
+
+.content {
+  padding: 16px;
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: 14px;
+}
+
+.planCard {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.planCard :global(.ant-card-body) {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.planHint {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.chapterCollapse {
+  background: transparent;
+  border: 0;
+}
+
+.chapterCollapse :global(.ant-collapse-item) {
+  margin-bottom: 10px;
+  border: 1px solid var(--border) !important;
+  border-radius: 12px !important;
+  background: var(--bg-base);
+  overflow: hidden;
+}
+
+.chapterCollapse :global(.ant-collapse-header) {
+  align-items: center !important;
+  padding: 12px 14px !important;
+}
+
+.chapterCollapse :global(.ant-collapse-content) {
+  border-top: 1px solid var(--border) !important;
+  background: var(--bg-panel) !important;
+}
+
+.chapterCollapse :global(.ant-collapse-content-box) {
+  padding: 0 !important;
+}
+
+.chapterPanelLabel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.chapterPanelMeta {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.chapterPanelBody {
+  padding: 12px;
+}
+
+.chapterOutlineEditor {
+  width: 100%;
+  resize: vertical !important;
+  border-radius: 10px !important;
+  background: #0b0b0b !important;
+  color: var(--text-primary) !important;
+  font-size: 15px !important;
+  line-height: 1.9 !important;
+  box-shadow: none !important;
+}
+
+.emptyPlan {
+  min-height: 360px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+}
+
+.chapterRail {
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-panel);
+}
+
+.railTitle {
+  padding: 14px 14px 6px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.railHint {
+  padding: 0 14px 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.7;
+  border-bottom: 1px solid var(--border);
+}
+
+.chapterList {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.chapterEntry {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.chapterEntry:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.chapterEntry:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.chapterEntryTitle {
+  font-size: 13px;
+  font-weight: 650;
+  color: inherit;
+}
+
+.chapterEntryMeta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.emptyRail {
+  padding: 12px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.empty {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}

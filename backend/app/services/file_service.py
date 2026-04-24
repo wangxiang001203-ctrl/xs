@@ -77,6 +77,18 @@ def save_chapter_synopsis(novel_id: str, chapter_number: int, synopsis_data: dic
     chapter_dir.mkdir(parents=True, exist_ok=True)
     path = chapter_dir / "synopsis.json"
     _write_json(path, synopsis_data)
+    markdown = synopsis_data.get("content_md")
+    if isinstance(markdown, str) and markdown.strip():
+        _write_text(chapter_dir / "synopsis.md", markdown)
+        _write_text(get_project_dir(novel_id) / "synopses" / f"chapter_{chapter_number:03d}.md", markdown)
+    _write_json(get_project_dir(novel_id) / "synopses" / f"chapter_{chapter_number:03d}.json", synopsis_data)
+
+
+def save_chapter_plot_summary(novel_id: str, chapter_number: int, summary: str):
+    clean_summary = (summary or "").strip()
+    if not clean_summary:
+        return
+    _write_text(get_project_dir(novel_id) / "plots" / f"chapter_{chapter_number:03d}.md", clean_summary)
 
 
 def save_chapter_content(novel_id: str, chapter_number: int, content: str):
@@ -91,3 +103,14 @@ def save_volume_plan(novel_id: str, volume_number: int, content: str, plan_data:
     volume_dir.mkdir(parents=True, exist_ok=True)
     _write_text(volume_dir / "plan.md", content)
     _write_json(volume_dir / "plan.json", plan_data)
+
+
+def save_chapter_memory(novel_id: str, chapter_number: int, memory_data: dict):
+    chapter_dir = get_project_dir(novel_id) / "chapters" / f"chapter_{chapter_number:03d}"
+    chapter_dir.mkdir(parents=True, exist_ok=True)
+    _write_json(chapter_dir / "memory.json", memory_data)
+
+
+def save_entity_proposals(novel_id: str, proposals_data: list[dict]):
+    project_dir = get_project_dir(novel_id)
+    _write_json(project_dir / "proposals" / "proposals.json", proposals_data)

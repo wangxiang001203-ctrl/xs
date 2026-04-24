@@ -9,20 +9,30 @@ import {
 } from '../utils/workspace'
 
 type MainView = WorkspaceTabType | 'synopsis'
+type WorkspaceMode = 'bookshelf' | 'editor'
 
 interface OpenTabInput {
   type: WorkspaceTabType
   novelSnapshot?: Novel | null
   chapterSnapshot?: Chapter | null
+  volumeSnapshot?: Volume | null
   closable?: boolean
 }
 
 interface AppState {
+  workspaceMode: WorkspaceMode
+  setWorkspaceMode: (mode: WorkspaceMode) => void
+  openNovelWorkspace: (novel: Novel) => void
+  openAdminWorkspace: () => void
+
   currentNovel: Novel | null
   setCurrentNovel: (novel: Novel | null) => void
 
   currentChapter: Chapter | null
   setCurrentChapter: (chapter: Chapter | null) => void
+
+  currentVolume: Volume | null
+  setCurrentVolume: (volume: Volume | null) => void
 
   currentView: MainView
   setCurrentView: (view: MainView) => void
@@ -54,14 +64,17 @@ interface AppState {
 function buildTab(input: OpenTabInput): WorkspaceTab {
   const novel = input.novelSnapshot ?? null
   const chapter = input.chapterSnapshot ?? null
+  const volume = input.volumeSnapshot ?? null
   return {
-    id: getWorkspaceTabId(input.type, novel?.id, chapter?.id),
+    id: getWorkspaceTabId(input.type, novel?.id, chapter?.id, volume?.id),
     type: input.type,
-    title: buildWorkspaceTitle(input.type, novel, chapter),
+    title: buildWorkspaceTitle(input.type, novel, chapter, volume),
     novelId: novel?.id,
     chapterId: chapter?.id,
+    volumeId: volume?.id,
     novelSnapshot: novel,
     chapterSnapshot: chapter,
+    volumeSnapshot: volume,
     closable: input.closable ?? input.type !== 'admin',
   }
 }
@@ -78,6 +91,43 @@ function nextActiveContext(openTabs: WorkspaceTab[], tabId: string) {
 export const useAppStore = create<AppState>()(
   persist(
     (set) => ({
+      workspaceMode: 'bookshelf',
+      setWorkspaceMode: (mode) => set({ workspaceMode: mode }),
+      openNovelWorkspace: (novel) =>
+        set(() => {
+          const tab = buildTab({ type: 'outline', novelSnapshot: novel, closable: false })
+          return {
+            workspaceMode: 'editor',
+            currentNovel: novel,
+            currentChapter: null,
+            currentVolume: null,
+            currentView: 'outline',
+            characters: [],
+            worldbuilding: null,
+            chapters: [],
+            volumes: [],
+            openTabs: [tab],
+            activeTabId: tab.id,
+          }
+        }),
+      openAdminWorkspace: () =>
+        set(() => {
+          const tab = buildTab({ type: 'admin', closable: false })
+          return {
+            workspaceMode: 'editor',
+            currentNovel: null,
+            currentChapter: null,
+            currentVolume: null,
+            currentView: 'admin',
+            characters: [],
+            worldbuilding: null,
+            chapters: [],
+            volumes: [],
+            openTabs: [tab],
+            activeTabId: tab.id,
+          }
+        }),
+
       currentNovel: null,
       setCurrentNovel: (novel) =>
         set((state) => ({
@@ -88,7 +138,7 @@ export const useAppStore = create<AppState>()(
                 return {
                   ...tab,
                   novelSnapshot: novel,
-                  title: buildWorkspaceTitle(tab.type, novel, tab.chapterSnapshot ?? null),
+                  title: buildWorkspaceTitle(tab.type, novel, tab.chapterSnapshot ?? null, tab.volumeSnapshot ?? state.currentVolume),
                 }
               })
             : state.openTabs,
@@ -104,7 +154,23 @@ export const useAppStore = create<AppState>()(
                 return {
                   ...tab,
                   chapterSnapshot: chapter,
-                  title: buildWorkspaceTitle(tab.type, tab.novelSnapshot ?? state.currentNovel, chapter),
+                  title: buildWorkspaceTitle(tab.type, tab.novelSnapshot ?? state.currentNovel, chapter, tab.volumeSnapshot ?? state.currentVolume),
+                }
+              })
+            : state.openTabs,
+        })),
+
+      currentVolume: null,
+      setCurrentVolume: (volume) =>
+        set((state) => ({
+          currentVolume: volume,
+          openTabs: volume
+            ? state.openTabs.map((tab) => {
+                if (tab.volumeId !== volume.id) return tab
+                return {
+                  ...tab,
+                  volumeSnapshot: volume,
+                  title: buildWorkspaceTitle(tab.type, tab.novelSnapshot ?? state.currentNovel, tab.chapterSnapshot ?? state.currentChapter, volume),
                 }
               })
             : state.openTabs,
@@ -140,7 +206,10 @@ export const useAppStore = create<AppState>()(
             activeTabId: tab.id,
             currentView: tab.type,
             currentNovel: tab.novelSnapshot ?? state.currentNovel,
-            currentChapter: tab.type === 'chapter' ? tab.chapterSnapshot ?? state.currentChapter : null,
+            currentVolume: tab.type === 'volume' ? tab.volumeSnapshot ?? state.currentVolume : state.currentVolume,
+            currentChapter: tab.type === 'chapter' || tab.type === 'chapter_synopsis'
+              ? tab.chapterSnapshot ?? state.currentChapter
+              : null,
           }
         }),
       activateTab: (tabId) =>
@@ -151,7 +220,10 @@ export const useAppStore = create<AppState>()(
             activeTabId: tab.id,
             currentView: tab.type,
             currentNovel: tab.novelSnapshot ?? state.currentNovel,
-            currentChapter: tab.type === 'chapter' ? tab.chapterSnapshot ?? state.currentChapter : null,
+            currentVolume: tab.type === 'volume' ? tab.volumeSnapshot ?? state.currentVolume : state.currentVolume,
+            currentChapter: tab.type === 'chapter' || tab.type === 'chapter_synopsis'
+              ? tab.chapterSnapshot ?? state.currentChapter
+              : null,
           }
         }),
       closeTab: (tabId) =>
@@ -162,6 +234,7 @@ export const useAppStore = create<AppState>()(
             return {
               openTabs: result.remaining,
               activeTabId: null,
+              currentVolume: null,
               currentChapter: null,
             }
           }
@@ -170,7 +243,10 @@ export const useAppStore = create<AppState>()(
             activeTabId: result.nextTab.id,
             currentView: result.nextTab.type,
             currentNovel: result.nextTab.novelSnapshot ?? state.currentNovel,
-            currentChapter: result.nextTab.type === 'chapter' ? result.nextTab.chapterSnapshot ?? state.currentChapter : null,
+            currentVolume: result.nextTab.type === 'volume' ? result.nextTab.volumeSnapshot ?? state.currentVolume : state.currentVolume,
+            currentChapter: result.nextTab.type === 'chapter' || result.nextTab.type === 'chapter_synopsis'
+              ? result.nextTab.chapterSnapshot ?? state.currentChapter
+              : null,
           }
         }),
 
@@ -205,6 +281,7 @@ export const useAppStore = create<AppState>()(
       partialize: (state) => ({
         currentNovel: state.currentNovel,
         currentChapter: state.currentChapter,
+        currentVolume: state.currentVolume,
         currentView: state.currentView,
         openTabs: state.openTabs,
         activeTabId: state.activeTabId,

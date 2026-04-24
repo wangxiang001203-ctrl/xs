@@ -5,7 +5,7 @@ from app.config import get_settings
 from app.database import engine, Base
 import app.models  # noqa: F401 — 触发所有模型注册
 
-from app.routers import projects, outline, characters, worldbuilding, chapters, ai, volumes, admin
+from app.routers import projects, outline, characters, worldbuilding, chapters, ai, volumes, admin, review
 
 settings = get_settings()
 
@@ -57,6 +57,51 @@ def _ensure_schema():
         if "items" not in columns:
             alter_sqls.append("ALTER TABLE worldbuilding ADD COLUMN items JSON")
 
+    if "volumes" in tables:
+        columns = {col["name"] for col in inspector.get_columns("volumes")}
+        if "target_words" not in columns:
+            alter_sqls.append("ALTER TABLE volumes ADD COLUMN target_words INTEGER DEFAULT 0")
+        if "planned_chapter_count" not in columns:
+            alter_sqls.append("ALTER TABLE volumes ADD COLUMN planned_chapter_count INTEGER DEFAULT 0")
+        if "main_line" not in columns:
+            alter_sqls.append("ALTER TABLE volumes ADD COLUMN main_line TEXT")
+        if "character_arc" not in columns:
+            alter_sqls.append("ALTER TABLE volumes ADD COLUMN character_arc TEXT")
+        if "ending_hook" not in columns:
+            alter_sqls.append("ALTER TABLE volumes ADD COLUMN ending_hook TEXT")
+        if "plan_markdown" not in columns:
+            alter_sqls.append("ALTER TABLE volumes ADD COLUMN plan_markdown LONGTEXT")
+        if "plan_data" not in columns:
+            alter_sqls.append("ALTER TABLE volumes ADD COLUMN plan_data JSON")
+        if "review_status" not in columns:
+            alter_sqls.append("ALTER TABLE volumes ADD COLUMN review_status VARCHAR(20) DEFAULT 'draft'")
+        if "approved_at" not in columns:
+            alter_sqls.append("ALTER TABLE volumes ADD COLUMN approved_at DATETIME")
+
+    if "chapters" in tables:
+        columns = {col["name"] for col in inspector.get_columns("chapters")}
+        if "final_approved" not in columns:
+            alter_sqls.append("ALTER TABLE chapters ADD COLUMN final_approved BOOLEAN DEFAULT FALSE")
+        if "final_approval_note" not in columns:
+            alter_sqls.append("ALTER TABLE chapters ADD COLUMN final_approval_note TEXT")
+        if "final_approved_at" not in columns:
+            alter_sqls.append("ALTER TABLE chapters ADD COLUMN final_approved_at DATETIME")
+
+    if "synopses" in tables:
+        columns = {col["name"] for col in inspector.get_columns("synopses")}
+        if "summary_line" not in columns:
+            alter_sqls.append("ALTER TABLE synopses ADD COLUMN summary_line VARCHAR(255)")
+        if "content_md" not in columns:
+            alter_sqls.append("ALTER TABLE synopses ADD COLUMN content_md LONGTEXT")
+        if "hard_constraints" not in columns:
+            alter_sqls.append("ALTER TABLE synopses ADD COLUMN hard_constraints JSON")
+        if "referenced_entities" not in columns:
+            alter_sqls.append("ALTER TABLE synopses ADD COLUMN referenced_entities JSON")
+        if "review_status" not in columns:
+            alter_sqls.append("ALTER TABLE synopses ADD COLUMN review_status VARCHAR(20) DEFAULT 'draft'")
+        if "approved_at" not in columns:
+            alter_sqls.append("ALTER TABLE synopses ADD COLUMN approved_at DATETIME")
+
     if not alter_sqls:
         return
     with engine.begin() as conn:
@@ -88,6 +133,7 @@ app.include_router(chapters.router)
 app.include_router(volumes.router)
 app.include_router(ai.router)
 app.include_router(admin.router)
+app.include_router(review.router)
 
 
 @app.get("/health")

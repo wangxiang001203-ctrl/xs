@@ -40,6 +40,12 @@ class Synopsis(Base):
     # 汇总（校验用）
     all_characters: Mapped[list | None] = mapped_column(JSON, default=list, comment="本章涉及人物全集")
     word_count_target: Mapped[int] = mapped_column(Integer, default=3000, comment="目标字数")
+    summary_line: Mapped[str | None] = mapped_column(String(255), comment="本章一句话摘要")
+    content_md: Mapped[str | None] = mapped_column(Text(length=4294967295), comment="整章细纲Markdown")
+    hard_constraints: Mapped[list | None] = mapped_column(JSON, default=list, comment="本章硬约束")
+    referenced_entities: Mapped[dict | None] = mapped_column(JSON, default=dict, comment="本章引用实体")
+    review_status: Mapped[str] = mapped_column(String(20), default="draft", comment="细纲审批状态")
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, comment="细纲批准时间")
 
     # 本章剧情缩略（写完后填写）
     plot_summary_update: Mapped[str | None] = mapped_column(Text, comment="写作后剧情回填摘要")

@@ -1,56 +1,39 @@
 import { useEffect, useState } from 'react'
-import { Button, Tooltip, Modal, Form, Input, Select, message, Spin, Popconfirm } from 'antd'
+import { Button, Tooltip, Modal, Form, Input, Select, message, Popconfirm } from 'antd'
 import {
   BookOutlined, UserOutlined, GlobalOutlined,
   PlusOutlined, UnorderedListOutlined, FileTextOutlined,
-  FolderOutlined, ThunderboltOutlined, DownOutlined, RightOutlined,
+  FolderOutlined, ThunderboltOutlined,
   SettingOutlined,
 } from '@ant-design/icons'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../../api'
 import { useAppStore } from '../../store'
-import type { ModelProviderConfig, Novel, Chapter, Volume, WorkflowConfig } from '../../types'
+import type { ModelProviderConfig, Chapter, Volume, WorkflowConfig } from '../../types'
 import styles from './LeftNav.module.css'
 
 export default function LeftNav() {
+  const navigate = useNavigate()
   const {
     currentNovel,
     currentView,
     currentChapter, setCurrentChapter,
-    setCharacters, setWorldbuilding, setChapters,
+    setCurrentVolume,
+    setWorkspaceMode,
+    setChapters,
     chapters, volumes, setVolumes,
     openTab,
   } = useAppStore()
 
-  const [novels, setNovels] = useState<Novel[]>([])
-  const [loading, setLoading] = useState(false)
-  const [createOpen, setCreateOpen] = useState(false)
   const [volumeOpen, setVolumeOpen] = useState(false)
-  const [collapsedVolumes, setCollapsedVolumes] = useState<Set<string>>(new Set())
   const [generatingVolume, setGeneratingVolume] = useState<string | null>(null)
   const [workflowConfig, setWorkflowConfig] = useState<WorkflowConfig | null>(null)
   const [savingModelConfig, setSavingModelConfig] = useState(false)
-  const [form] = Form.useForm()
   const [volumeForm] = Form.useForm()
 
   useEffect(() => {
-    loadNovels()
     loadWorkflowConfig()
   }, [])
-
-  useEffect(() => {
-    if (!currentNovel) return
-    setNovels(prev => prev.map(n => (n.id === currentNovel.id ? { ...n, ...currentNovel } : n)))
-  }, [currentNovel?.id, currentNovel?.title, currentNovel?.synopsis, currentNovel?.updated_at])
-
-  async function loadNovels() {
-    setLoading(true)
-    try {
-      const list = await api.novels.list()
-      setNovels(list)
-    } finally {
-      setLoading(false)
-    }
-  }
 
   async function loadWorkflowConfig() {
     try {
@@ -58,32 +41,6 @@ export default function LeftNav() {
       setWorkflowConfig(config)
     } catch {
       message.error('加载模型配置失败')
-    }
-  }
-
-  async function selectNovel(novel: Novel) {
-    openTab({ type: 'outline', novelSnapshot: novel })
-    const [chars, wb, chs, vols] = await Promise.all([
-      api.characters.list(novel.id),
-      api.worldbuilding.get(novel.id).catch(() => null),
-      api.chapters.list(novel.id),
-      api.volumes.list(novel.id).catch(() => [] as Volume[]),
-    ])
-    setCharacters(chars)
-    setWorldbuilding(wb)
-    setChapters(chs)
-    setVolumes(vols)
-  }
-
-  async function createNovel(values: { title: string; genre: string }) {
-    try {
-      const novel = await api.novels.create(values)
-      setNovels(prev => [novel, ...prev])
-      setCreateOpen(false)
-      form.resetFields()
-      selectNovel(novel)
-    } catch {
-      message.error('创建失败')
     }
   }
 
@@ -99,8 +56,12 @@ export default function LeftNav() {
         await api.volumes.assignChapter(currentNovel.id, volumeId, ch.id)
         const updated = { ...ch, volume_id: volumeId }
         setChapters([...chapters, updated])
-        setCurrentChapter(updated)
-        openTab({ type: 'chapter', novelSnapshot: currentNovel, chapterSnapshot: updated })
+        const volume = volumes.find(item => item.id === volumeId)
+        if (volume) {
+          setCurrentVolume(volume)
+          openTab({ type: 'volume', novelSnapshot: currentNovel, volumeSnapshot: volume })
+        }
+        message.success('章节已加入分卷，请先生成或更新本卷细纲')
       } else {
         setChapters([...chapters, ch])
         setCurrentChapter(ch)
@@ -109,6 +70,14 @@ export default function LeftNav() {
     } catch {
       message.error('创建章节失败')
     }
+  }
+
+  function canOpenChapterContent(chapter: Chapter) {
+    if (chapter.chapter_number <= 1) return true
+    const previous = [...chapters]
+      .filter(item => item.chapter_number < chapter.chapter_number)
+      .sort((a, b) => b.chapter_number - a.chapter_number)[0]
+    return previous ? previous.final_approved : true
   }
 
   async function createVolume(values: { title: string; description?: string }) {
@@ -120,6 +89,8 @@ export default function LeftNav() {
         description: values.description,
       })
       setVolumes([...volumes, vol])
+      setCurrentVolume(vol)
+      openTab({ type: 'volume', novelSnapshot: currentNovel, volumeSnapshot: vol })
       setVolumeOpen(false)
       volumeForm.resetFields()
     } catch {
@@ -132,8 +103,8 @@ export default function LeftNav() {
     try {
       await api.volumes.delete(currentNovel.id, volumeId)
       setVolumes(volumes.filter(v => v.id !== volumeId))
-    } catch {
-      message.error('删除失败')
+    } catch (err: any) {
+      message.error(err?.response?.data?.detail || '删除失败')
     }
   }
 
@@ -148,11 +119,11 @@ export default function LeftNav() {
       ])
       setVolumes(vols)
       setChapters(chs)
-      if (result.auto_created_characters && result.auto_created_characters.length > 0) {
-        const chars = await api.characters.list(currentNovel.id)
-        setCharacters(chars)
+      if (result.pending_proposals && result.pending_proposals.length > 0) {
+        message.warning(`《${volume.title}》细纲生成完成，但有 ${result.pending_proposals.length} 条新实体提案待审阅`)
+      } else {
+        message.success(`《${volume.title}》细纲生成完成，已同步 ${result.chapter_count || chs.filter(ch => ch.volume_id === volume.id).length} 章`)
       }
-      message.success(`《${volume.title}》细纲生成完成，已同步 ${result.chapter_count || chs.filter(ch => ch.volume_id === volume.id).length} 章`)
     } catch (err: any) {
       message.error(`生成失败：${err?.response?.data?.detail || err.message}`)
     } finally {
@@ -202,30 +173,56 @@ export default function LeftNav() {
     void saveModelConfig(activeProvider.id, modelId)
   }
 
-  function toggleVolume(volumeId: string) {
-    setCollapsedVolumes(prev => {
-      const next = new Set(prev)
-      if (next.has(volumeId)) next.delete(volumeId)
-      else next.add(volumeId)
-      return next
-    })
+  async function openChapterContent(chapter: Chapter) {
+    if (!currentNovel) return
+    const chapterStarted = Boolean(chapter.word_count || chapter.final_approved || chapter.status !== 'draft')
+    const activeVolume = chapter.volume_id ? volumes.find(volume => volume.id === chapter.volume_id) || null : null
+    if (!activeVolume && !chapterStarted) {
+      message.warning('请先在分卷细纲中规划这一章，再进入正文写作')
+      return
+    }
+    if (activeVolume && activeVolume.review_status !== 'approved' && !chapterStarted) {
+      message.warning('本卷细纲尚未审批，暂时不能进入正文写作')
+      return
+    }
+    if (!chapterStarted) {
+      try {
+        const synopsis = await api.chapters.getSynopsis(currentNovel.id, chapter.id)
+        if (!synopsis.content_md?.trim() || synopsis.review_status !== 'approved') {
+          message.warning('本章细纲尚未确认，请先从分卷细纲页处理')
+          return
+        }
+      } catch {
+        message.warning('本章还没有细纲，请先从分卷细纲页生成')
+        return
+      }
+    }
+    if (!canOpenChapterContent(chapter)) {
+      message.warning('上一章尚未人工定稿，暂时不能进入这一章正文')
+      return
+    }
+    const nextChapter = activeVolume ? { ...chapter, volume_id: activeVolume.id } : chapter
+    if (activeVolume) setCurrentVolume(activeVolume)
+    setCurrentChapter(nextChapter)
+    openTab({ type: 'chapter', novelSnapshot: currentNovel, chapterSnapshot: nextChapter })
   }
 
-  // 未分卷章节
-  const unassignedChapters = chapters.filter(c => !c.volume_id)
+  const orderedChapters = [...chapters].sort((a, b) => a.chapter_number - b.chapter_number)
+
+  function backToBookshelf() {
+    setWorkspaceMode('bookshelf')
+    navigate('/bookshelf')
+  }
 
   return (
     <div className={styles.nav}>
       {/* 顶部 */}
       <div className={styles.header}>
+        <button type="button" className={styles.shelfButton} onClick={backToBookshelf}>
+          <BookOutlined />
+          <span>书架</span>
+        </button>
         <span className={styles.logo}>墨笔</span>
-        <Tooltip title="新建小说">
-          <Button
-            type="text" size="small" icon={<PlusOutlined />}
-            className={styles.addBtn}
-            onClick={() => setCreateOpen(true)}
-          />
-        </Tooltip>
       </div>
 
       <div className={styles.modelConfigCard}>
@@ -257,21 +254,6 @@ export default function LeftNav() {
           disabled={savingModelConfig || !activeProvider}
         />
         <div className={styles.modelHint}>当前先走豆包，同一 API Key，后续可扩展更多提供商。</div>
-      </div>
-
-      {/* 小说列表 */}
-      <div className={styles.novelList}>
-        {loading ? <Spin size="small" style={{ margin: '12px auto', display: 'block' }} /> : null}
-        {novels.map(n => (
-          <div
-            key={n.id}
-            className={`${styles.novelItem} ${currentNovel?.id === n.id ? styles.active : ''}`}
-            onClick={() => selectNovel(n)}
-          >
-            <BookOutlined className={styles.novelIcon} />
-            <span className={styles.novelTitle}>{n.title}</span>
-          </div>
-        ))}
       </div>
 
       <div className={styles.adminEntry}>
@@ -313,31 +295,34 @@ export default function LeftNav() {
             onClick={() => { openTab({ type: 'worldbuilding', novelSnapshot: currentNovel }); setCurrentChapter(null) }}
           />
 
-          {/* 卷列表 */}
+          {/* 分卷文档树 */}
           <div className={styles.chapterSection}>
             <div className={styles.chapterHeader}>
-              <span>章节</span>
+              <span>分卷</span>
               <div style={{ display: 'flex', gap: 2 }}>
                 <Tooltip title="新建卷">
                   <Button type="text" size="small" icon={<FolderOutlined />} onClick={() => setVolumeOpen(true)} />
                 </Tooltip>
-                <Tooltip title="新建章节（不分卷）">
-                  <Button type="text" size="small" icon={<PlusOutlined />} onClick={() => addChapter()} />
-                </Tooltip>
               </div>
             </div>
 
+            {volumes.length === 0 ? (
+              <div className={styles.emptyTreeHint}>暂无分卷。确认大纲后会自动创建分卷，也可以点上方文件夹手动新建。</div>
+            ) : null}
+
             {/* 各卷 */}
             {volumes.map(vol => {
-              const volChapters = chapters.filter(c => c.volume_id === vol.id)
-              const collapsed = collapsedVolumes.has(vol.id)
               return (
                 <div key={vol.id} className={styles.volumeGroup}>
                   <div className={styles.volumeHeader}>
-                    <span className={styles.volumeToggle} onClick={() => toggleVolume(vol.id)}>
-                      {collapsed ? <RightOutlined /> : <DownOutlined />}
-                    </span>
-                    <span className={styles.volumeTitle} onClick={() => toggleVolume(vol.id)}>
+                    <FolderOutlined className={styles.volumeToggle} />
+                    <span
+                      className={styles.volumeTitle}
+                      onClick={() => {
+                        setCurrentVolume(vol)
+                        openTab({ type: 'volume', novelSnapshot: currentNovel, volumeSnapshot: vol })
+                      }}
+                    >
                       {vol.title}
                     </span>
                     <div className={styles.volumeActions}>
@@ -352,59 +337,32 @@ export default function LeftNav() {
                       <Tooltip title="新建章节">
                         <Button type="text" size="small" icon={<PlusOutlined />} onClick={() => addChapter(vol.id)} />
                       </Tooltip>
-                      <Popconfirm title="删除此卷？章节不会删除" onConfirm={() => deleteVolume(vol.id)} okText="删除" cancelText="取消">
+                      <Popconfirm title="删除此卷？已开始写作的卷会被后端拦截" onConfirm={() => deleteVolume(vol.id)} okText="删除" cancelText="取消">
                         <Button type="text" size="small" danger style={{ fontSize: 10 }}>×</Button>
                       </Popconfirm>
                     </div>
                   </div>
-                  {!collapsed && volChapters.map(ch => (
-                    <ChapterItem
-                      key={ch.id}
-                      ch={ch}
-                      active={currentChapter?.id === ch.id}
-                      onClick={() => { setCurrentChapter(ch); openTab({ type: 'chapter', novelSnapshot: currentNovel, chapterSnapshot: ch }) }}
-                    />
-                  ))}
                 </div>
               )
             })}
 
-            {/* 未分卷章节 */}
-            {unassignedChapters.map(ch => (
-              <ChapterItem
+            <div className={styles.chapterHeader}>
+              <span>正文</span>
+              <Tooltip title="新建章节正文">
+                <Button type="text" size="small" icon={<PlusOutlined />} onClick={() => addChapter()} />
+              </Tooltip>
+            </div>
+            {orderedChapters.map(ch => (
+              <ChapterContentItem
                 key={ch.id}
                 ch={ch}
-                active={currentChapter?.id === ch.id}
-                onClick={() => { setCurrentChapter(ch); openTab({ type: 'chapter', novelSnapshot: currentNovel, chapterSnapshot: ch }) }}
+                active={currentView === 'chapter' && currentChapter?.id === ch.id}
+                onOpenContent={() => openChapterContent(ch)}
               />
             ))}
           </div>
         </div>
       )}
-
-      {/* 新建小说弹窗 */}
-      <Modal
-        title="新建小说"
-        open={createOpen}
-        onCancel={() => setCreateOpen(false)}
-        onOk={() => form.submit()}
-        okText="创建"
-        cancelText="取消"
-      >
-        <Form form={form} layout="vertical" onFinish={createNovel}>
-          <Form.Item name="title" label="书名" rules={[{ required: true }]}>
-            <Input placeholder="请输入书名" />
-          </Form.Item>
-          <Form.Item name="genre" label="类型" initialValue="玄幻修仙">
-            <Select options={[
-              { value: '玄幻修仙', label: '玄幻修仙' },
-              { value: '都市', label: '都市' },
-              { value: '科幻', label: '科幻' },
-              { value: '历史', label: '历史' },
-            ]} />
-          </Form.Item>
-        </Form>
-      </Modal>
 
       {/* 新建卷弹窗 */}
       <Modal
@@ -445,17 +403,24 @@ function NavItem({ icon, label, active, onClick }: {
   )
 }
 
-function ChapterItem({ ch, active, onClick }: { ch: Chapter; active: boolean; onClick: () => void }) {
+function ChapterContentItem({
+  ch,
+  active,
+  onOpenContent,
+}: {
+  ch: Chapter
+  active: boolean
+  onOpenContent: () => void
+}) {
   return (
-    <div
-      className={`${styles.chapterItem} ${active ? styles.active : ''}`}
-      onClick={onClick}
+    <button
+      type="button"
+      className={`${styles.chapterDocItem} ${active ? styles.activeDoc : ''}`}
+      onClick={onOpenContent}
     >
-      <FileTextOutlined className={styles.chapterIcon} />
-      <span className={styles.chapterTitle}>
-        {ch.title || `第${ch.chapter_number}章`}
-      </span>
+      <BookOutlined className={styles.chapterIcon} />
+      <span className={styles.chapterTitle}>{ch.title || `第${ch.chapter_number}章`}</span>
       <span className={`${styles.chapterStatus} ${styles[`status_${ch.status}`]}`} />
-    </div>
+    </button>
   )
 }

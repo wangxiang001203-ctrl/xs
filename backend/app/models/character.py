@@ -18,7 +18,9 @@ class Character(Base):
         String(36), ForeignKey("novels.id", ondelete="CASCADE"), comment="所属小说ID"
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False, comment="人物名称")
+    aliases: Mapped[list | None] = mapped_column(JSON, default=list, comment="别名/称号")
     role: Mapped[str | None] = mapped_column(String(50), comment="人物定位，如主角/反派")  # 主角/女主/反派/配角
+    importance: Mapped[int] = mapped_column(Integer, default=3, comment="角色重要度，1-5")
     gender: Mapped[str | None] = mapped_column(String(10), comment="性别")
     age: Mapped[int | None] = mapped_column(Integer, comment="年龄")
     race: Mapped[str | None] = mapped_column(String(50), default="人族", comment="种族")
@@ -32,6 +34,7 @@ class Character(Base):
     background: Mapped[str | None] = mapped_column(Text, comment="人物背景")
     golden_finger: Mapped[str | None] = mapped_column(Text, comment="金手指或特殊能力")  # 金手指/特殊能力
     motivation: Mapped[str | None] = mapped_column(Text, comment="核心动机或执念")  # 核心动机/执念
+    profile_md: Mapped[str | None] = mapped_column(Text, comment="角色档案正文")
     relationships: Mapped[list | None] = mapped_column(JSON, default=list, comment="人物关系网")
     status: Mapped[str] = mapped_column(
         Enum("alive", "dead", "unknown"), default="alive", comment="生存状态"

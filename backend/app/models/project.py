@@ -57,6 +57,7 @@ class Outline(Base):
     ai_generated: Mapped[bool] = mapped_column(Boolean, default=True, comment="是否由AI生成")
     confirmed: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已确认采用")
     version: Mapped[int] = mapped_column(Integer, default=1, comment="大纲版本号")
+    version_note: Mapped[str | None] = mapped_column(String(255), comment="版本备注")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, comment="创建时间")
 
     novel: Mapped["Novel"] = relationship(back_populates="outlines")

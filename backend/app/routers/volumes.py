@@ -170,9 +170,58 @@ def _chapter_has_started(chapter: Chapter) -> bool:
     )
 
 
+def _chapter_has_volume_material(chapter: Chapter, synopsis: Synopsis | None = None) -> bool:
+    if _chapter_has_started(chapter):
+        return True
+    if synopsis is None:
+        return False
+    return bool(
+        (synopsis.summary_line or "").strip()
+        or (synopsis.content_md or "").strip()
+        or (synopsis.plot_summary_update or "").strip()
+        or (synopsis.opening_scene or "").strip()
+        or (synopsis.development_events or [])
+        or (synopsis.hard_constraints or [])
+    )
+
+
+_CN_DIGITS = {
+    "零": 0,
+    "〇": 0,
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+}
+
+
+def _number_to_chinese(number: int) -> str:
+    if number <= 0:
+        return str(number)
+    if number < 10:
+        return next((key for key, value in _CN_DIGITS.items() if value == number and key not in ("两", "〇")), str(number))
+    if number < 100:
+        tens, ones = divmod(number, 10)
+        prefix = "" if tens == 1 else _number_to_chinese(tens)
+        return f"{prefix}十{_number_to_chinese(ones) if ones else ''}"
+    if number < 1000:
+        hundreds, rest = divmod(number, 100)
+        middle = "零" if rest and rest < 10 else ""
+        return f"{_number_to_chinese(hundreds)}百{middle}{_number_to_chinese(rest) if rest else ''}"
+    thousands, rest = divmod(number, 1000)
+    middle = "零" if rest and rest < 100 else ""
+    return f"{_number_to_chinese(thousands)}千{middle}{_number_to_chinese(rest) if rest else ''}"
+
+
 def _contains_chapter_heading(markdown: str, chapter_number: int) -> bool:
     compact = re.sub(r"\s+", "", markdown or "")
-    return f"第{chapter_number}章" in compact
+    return f"第{chapter_number}章" in compact or f"第{_number_to_chinese(chapter_number)}章" in compact
 
 
 def _guard_volume_plan_keeps_started_chapters(db: Session, volume: Volume, next_markdown: str):
@@ -308,6 +357,10 @@ def update_volume(novel_id: str, volume_id: str, body: VolumeUpdate, db: Session
         raise HTTPException(404, "卷不存在")
     update_data = body.model_dump(exclude_none=True, exclude={"chapter_synopses"})
     if "plan_markdown" in update_data:
+        incoming_plan = (update_data["plan_markdown"] or "").strip()
+        current_plan = (v.plan_markdown or "").strip()
+        if v.review_status == "approved" and incoming_plan != current_plan:
+            raise HTTPException(400, "本卷细纲已经确认，不能直接改写。请先通过后续改稿/补录流程处理。")
         _guard_volume_plan_keeps_started_chapters(db, v, update_data["plan_markdown"] or "")
     for k, val in update_data.items():
         setattr(v, k, val)
@@ -356,15 +409,31 @@ def delete_volume(novel_id: str, volume_id: str, db: Session = Depends(get_db)):
     v = db.query(Volume).filter(Volume.id == volume_id, Volume.novel_id == novel_id).first()
     if not v:
         raise HTTPException(404, "卷不存在")
-    started_chapters = [
+    chapters = db.query(Chapter).filter(Chapter.volume_id == volume_id).order_by(Chapter.chapter_number).all()
+    synopsis_by_chapter = {
+        item.chapter_id: item
+        for item in db.query(Synopsis).filter(Synopsis.chapter_id.in_([chapter.id for chapter in chapters])).all()
+    } if chapters else {}
+    material_chapters = [
         chapter
-        for chapter in db.query(Chapter).filter(Chapter.volume_id == volume_id).all()
-        if _chapter_has_started(chapter)
+        for chapter in chapters
+        if _chapter_has_volume_material(chapter, synopsis_by_chapter.get(chapter.id))
     ]
-    if started_chapters:
-        first = min(started_chapters, key=lambda item: item.chapter_number)
-        raise HTTPException(400, f"第{first.chapter_number}章已开始写作，本卷不能删除")
-    # 解除章节关联，不删除章节
+    pending = db.query(EntityProposal).filter(
+        EntityProposal.novel_id == novel_id,
+        EntityProposal.volume_id == volume_id,
+        EntityProposal.status == "pending",
+    ).count()
+    if chapters or material_chapters or pending or (v.plan_markdown or "").strip():
+        if material_chapters:
+            first = material_chapters[0]
+            raise HTTPException(400, f"第{first.chapter_number}章已经有细纲、正文或定稿记录，本卷不能删除")
+        if chapters:
+            raise HTTPException(400, "本卷已经创建章节，不能删除。请保留卷顺序，必要时只调整标题和细纲内容。")
+        if pending:
+            raise HTTPException(400, "本卷还有待审阅提案，不能删除")
+        raise HTTPException(400, "本卷已经有细纲内容，不能删除")
+
     db.query(Chapter).filter(Chapter.volume_id == volume_id).update({"volume_id": None})
     db.delete(v)
     db.commit()
@@ -443,7 +512,7 @@ def approve_volume(novel_id: str, volume_id: str, db: Session = Depends(get_db))
     if not volume:
         raise HTTPException(404, "卷不存在")
 
-    chapters = db.query(Chapter).filter(Chapter.volume_id == volume_id).all()
+    chapters = db.query(Chapter).filter(Chapter.volume_id == volume_id).order_by(Chapter.chapter_number.asc()).all()
     if not chapters:
         raise HTTPException(400, "本卷还没有章节，无法审批")
     synopses: list[Synopsis] = []

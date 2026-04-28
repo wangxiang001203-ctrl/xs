@@ -16,6 +16,8 @@ interface OpenTabInput {
   novelSnapshot?: Novel | null
   chapterSnapshot?: Chapter | null
   volumeSnapshot?: Volume | null
+  worldbuildingSectionId?: string
+  worldbuildingSectionName?: string
   closable?: boolean
 }
 
@@ -42,6 +44,8 @@ interface AppState {
 
   worldbuilding: Worldbuilding | null
   setWorldbuilding: (wb: Worldbuilding | null) => void
+  activeWorldbuildingSectionId: string
+  setActiveWorldbuildingSectionId: (sectionId: string) => void
 
   chapters: Chapter[]
   setChapters: (chapters: Chapter[]) => void
@@ -54,6 +58,8 @@ interface AppState {
   openTab: (input: OpenTabInput) => void
   activateTab: (tabId: string) => void
   closeTab: (tabId: string) => void
+  closeOtherTabs: (tabId: string) => void
+  closeTabsToRight: (tabId: string) => void
 
   documentDrafts: Record<string, Record<string, unknown>>
   patchDocumentDraft: (docKey: string, patch: Record<string, unknown>) => void
@@ -65,13 +71,17 @@ function buildTab(input: OpenTabInput): WorkspaceTab {
   const novel = input.novelSnapshot ?? null
   const chapter = input.chapterSnapshot ?? null
   const volume = input.volumeSnapshot ?? null
+  const worldbuildingSectionId = input.worldbuildingSectionId
+  const worldbuildingSectionName = input.worldbuildingSectionName
   return {
-    id: getWorkspaceTabId(input.type, novel?.id, chapter?.id, volume?.id),
+    id: getWorkspaceTabId(input.type, novel?.id, chapter?.id, volume?.id, worldbuildingSectionId),
     type: input.type,
-    title: buildWorkspaceTitle(input.type, novel, chapter, volume),
+    title: buildWorkspaceTitle(input.type, novel, chapter, volume, worldbuildingSectionName),
     novelId: novel?.id,
     chapterId: chapter?.id,
     volumeId: volume?.id,
+    worldbuildingSectionId,
+    worldbuildingSectionName,
     novelSnapshot: novel,
     chapterSnapshot: chapter,
     volumeSnapshot: volume,
@@ -86,6 +96,21 @@ function nextActiveContext(openTabs: WorkspaceTab[], tabId: string) {
   if (remaining.length === 0) return { remaining, nextTab: null as WorkspaceTab | null }
   const nextTab = remaining[Math.min(closeIndex, remaining.length - 1)]
   return { remaining, nextTab }
+}
+
+function buildContextFromTab(tab: WorkspaceTab, state: AppState) {
+  return {
+    activeTabId: tab.id,
+    currentView: tab.type,
+    currentNovel: tab.novelSnapshot ?? state.currentNovel,
+    currentVolume: tab.type === 'volume' ? tab.volumeSnapshot ?? state.currentVolume : state.currentVolume,
+    currentChapter: tab.type === 'chapter' || tab.type === 'chapter_synopsis'
+      ? tab.chapterSnapshot ?? state.currentChapter
+      : null,
+    activeWorldbuildingSectionId: tab.type === 'worldbuilding'
+      ? tab.worldbuildingSectionId || 'overview'
+      : state.activeWorldbuildingSectionId,
+  }
 }
 
 export const useAppStore = create<AppState>()(
@@ -106,6 +131,7 @@ export const useAppStore = create<AppState>()(
             worldbuilding: null,
             chapters: [],
             volumes: [],
+            activeWorldbuildingSectionId: 'overview',
             openTabs: [tab],
             activeTabId: tab.id,
           }
@@ -123,6 +149,7 @@ export const useAppStore = create<AppState>()(
             worldbuilding: null,
             chapters: [],
             volumes: [],
+            activeWorldbuildingSectionId: 'overview',
             openTabs: [tab],
             activeTabId: tab.id,
           }
@@ -138,7 +165,7 @@ export const useAppStore = create<AppState>()(
                 return {
                   ...tab,
                   novelSnapshot: novel,
-                  title: buildWorkspaceTitle(tab.type, novel, tab.chapterSnapshot ?? null, tab.volumeSnapshot ?? state.currentVolume),
+                  title: buildWorkspaceTitle(tab.type, novel, tab.chapterSnapshot ?? null, tab.volumeSnapshot ?? state.currentVolume, tab.worldbuildingSectionName),
                 }
               })
             : state.openTabs,
@@ -154,7 +181,7 @@ export const useAppStore = create<AppState>()(
                 return {
                   ...tab,
                   chapterSnapshot: chapter,
-                  title: buildWorkspaceTitle(tab.type, tab.novelSnapshot ?? state.currentNovel, chapter, tab.volumeSnapshot ?? state.currentVolume),
+                  title: buildWorkspaceTitle(tab.type, tab.novelSnapshot ?? state.currentNovel, chapter, tab.volumeSnapshot ?? state.currentVolume, tab.worldbuildingSectionName),
                 }
               })
             : state.openTabs,
@@ -170,7 +197,7 @@ export const useAppStore = create<AppState>()(
                 return {
                   ...tab,
                   volumeSnapshot: volume,
-                  title: buildWorkspaceTitle(tab.type, tab.novelSnapshot ?? state.currentNovel, tab.chapterSnapshot ?? state.currentChapter, volume),
+                  title: buildWorkspaceTitle(tab.type, tab.novelSnapshot ?? state.currentNovel, tab.chapterSnapshot ?? state.currentChapter, volume, tab.worldbuildingSectionName),
                 }
               })
             : state.openTabs,
@@ -184,6 +211,8 @@ export const useAppStore = create<AppState>()(
 
       worldbuilding: null,
       setWorldbuilding: (wb) => set({ worldbuilding: wb }),
+      activeWorldbuildingSectionId: 'overview',
+      setActiveWorldbuildingSectionId: (sectionId) => set({ activeWorldbuildingSectionId: sectionId }),
 
       chapters: [],
       setChapters: (chapters) => set({ chapters }),
@@ -210,21 +239,16 @@ export const useAppStore = create<AppState>()(
             currentChapter: tab.type === 'chapter' || tab.type === 'chapter_synopsis'
               ? tab.chapterSnapshot ?? state.currentChapter
               : null,
+            activeWorldbuildingSectionId: tab.type === 'worldbuilding'
+              ? tab.worldbuildingSectionId || 'overview'
+              : state.activeWorldbuildingSectionId,
           }
         }),
       activateTab: (tabId) =>
         set((state) => {
           const tab = state.openTabs.find(item => item.id === tabId)
           if (!tab) return {}
-          return {
-            activeTabId: tab.id,
-            currentView: tab.type,
-            currentNovel: tab.novelSnapshot ?? state.currentNovel,
-            currentVolume: tab.type === 'volume' ? tab.volumeSnapshot ?? state.currentVolume : state.currentVolume,
-            currentChapter: tab.type === 'chapter' || tab.type === 'chapter_synopsis'
-              ? tab.chapterSnapshot ?? state.currentChapter
-              : null,
-          }
+          return buildContextFromTab(tab, state)
         }),
       closeTab: (tabId) =>
         set((state) => {
@@ -240,13 +264,30 @@ export const useAppStore = create<AppState>()(
           }
           return {
             openTabs: result.remaining,
-            activeTabId: result.nextTab.id,
-            currentView: result.nextTab.type,
-            currentNovel: result.nextTab.novelSnapshot ?? state.currentNovel,
-            currentVolume: result.nextTab.type === 'volume' ? result.nextTab.volumeSnapshot ?? state.currentVolume : state.currentVolume,
-            currentChapter: result.nextTab.type === 'chapter' || result.nextTab.type === 'chapter_synopsis'
-              ? result.nextTab.chapterSnapshot ?? state.currentChapter
-              : null,
+            ...buildContextFromTab(result.nextTab, state),
+          }
+        }),
+      closeOtherTabs: (tabId) =>
+        set((state) => {
+          const target = state.openTabs.find(tab => tab.id === tabId)
+          if (!target) return {}
+          const remaining = state.openTabs.filter(tab => tab.id === tabId || tab.closable === false)
+          return {
+            openTabs: remaining,
+            ...buildContextFromTab(target, state),
+          }
+        }),
+      closeTabsToRight: (tabId) =>
+        set((state) => {
+          const targetIndex = state.openTabs.findIndex(tab => tab.id === tabId)
+          if (targetIndex === -1) return {}
+          const target = state.openTabs[targetIndex]
+          const remaining = state.openTabs.filter((tab, index) => index <= targetIndex || tab.closable === false)
+          const activeStillOpen = remaining.find(tab => tab.id === state.activeTabId)
+          const nextActive = activeStillOpen || target
+          return {
+            openTabs: remaining,
+            ...buildContextFromTab(nextActive, state),
           }
         }),
 
@@ -285,6 +326,7 @@ export const useAppStore = create<AppState>()(
         currentView: state.currentView,
         openTabs: state.openTabs,
         activeTabId: state.activeTabId,
+        activeWorldbuildingSectionId: state.activeWorldbuildingSectionId,
         documentDrafts: state.documentDrafts,
       }),
     },

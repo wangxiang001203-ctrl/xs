@@ -9,6 +9,7 @@ from app.services.worldbuilding_service import (
     load_worldbuilding_document,
     normalize_worldbuilding_document,
 )
+from app.services.entity_service import sync_worldbuilding_entities
 
 router = APIRouter(prefix="/api/projects/{novel_id}/worldbuilding", tags=["worldbuilding"])
 
@@ -36,6 +37,7 @@ def upsert_worldbuilding(novel_id: str, data: WorldbuildingUpdate, db: Session =
             "id": getattr(wb, "id", None),
         },
     )
+    sync_worldbuilding_entities(db, novel_id, normalized)
     db.commit()
     db.refresh(wb)
     serialized = normalize_worldbuilding_document(

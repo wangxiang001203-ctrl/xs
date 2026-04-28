@@ -127,6 +127,28 @@ def _normalize_entry(raw: Any) -> dict[str, Any] | None:
     }
 
 
+def _entries_to_content(entries: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for entry in entries:
+        name = _text(entry.get("name"))
+        summary = _text(entry.get("summary"))
+        details = _text(entry.get("details"))
+        tags = _string_list(entry.get("tags"))
+        if not (name or summary or details):
+            continue
+        block: list[str] = []
+        if name:
+            block.append(f"## {name}")
+        if summary:
+            block.append(summary)
+        if details:
+            block.append(details)
+        if tags:
+            block.append(f"标签：{'、'.join(tags)}")
+        parts.append("\n".join(block))
+    return "\n\n".join(parts).strip()
+
+
 def _normalize_section(raw: Any) -> dict[str, Any] | None:
     raw_dict = _dict(raw)
     if not raw_dict:
@@ -136,8 +158,9 @@ def _normalize_section(raw: Any) -> dict[str, Any] | None:
     section_name = _text(raw_dict.get("name"))
     spec = _find_spec(section_id, section_name)
     normalized_entries = [entry for entry in (_normalize_entry(item) for item in raw_dict.get("entries", [])) if entry]
+    content = _text(raw_dict.get("content"))
 
-    if not (section_name or normalized_entries or _text(raw_dict.get("description")) or _text(raw_dict.get("generation_hint"))):
+    if not (section_name or normalized_entries or content or _text(raw_dict.get("description")) or _text(raw_dict.get("generation_hint"))):
         return None
 
     return {
@@ -145,6 +168,7 @@ def _normalize_section(raw: Any) -> dict[str, Any] | None:
         "name": section_name or (spec["name"] if spec else "未命名栏目"),
         "description": _text(raw_dict.get("description")) or (spec["description"] if spec else ""),
         "generation_hint": _text(raw_dict.get("generation_hint")),
+        "content": content,
         "entries": normalized_entries,
     }
 
@@ -175,6 +199,7 @@ def _section_from_legacy(spec: dict[str, Any], items: Any) -> dict[str, Any] | N
         "name": spec["name"],
         "description": spec["description"],
         "generation_hint": "",
+        "content": "",
         "entries": normalized_entries,
     }
 
@@ -186,6 +211,7 @@ def default_worldbuilding_sections() -> list[dict[str, Any]]:
             "name": spec["name"],
             "description": spec["description"],
             "generation_hint": "",
+            "content": "",
             "entries": [],
         }
         for spec in DEFAULT_SECTION_SPECS
@@ -211,6 +237,7 @@ def merge_sections(base_sections: list[dict[str, Any]], incoming_sections: list[
                     **current,
                     "generation_hint": current.get("generation_hint") or base.get("generation_hint") or "",
                     "description": current.get("description") or base.get("description") or "",
+                    "content": current.get("content") or base.get("content") or "",
                     "entries": current.get("entries") or base.get("entries") or [],
                 }
             )
@@ -382,5 +409,9 @@ def summarize_worldbuilding_document(document: dict[str, Any]) -> str:
         names = [name for name in names if name][:5]
         if names:
             parts.append(f"{section.get('name') or '设定栏目'}：{', '.join(names)}")
+            continue
+        content = _text(section.get("content"))
+        if content:
+            parts.append(f"{section.get('name') or '设定栏目'}：{content[:120]}")
 
     return "\n".join(parts) if parts else "暂无设定"

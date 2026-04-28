@@ -1,9 +1,10 @@
 .bar {
   border-bottom: 1px solid var(--border);
-  background: var(--bg-panel);
-  min-height: 46px;
+  background: rgba(255, 255, 255, 0.54);
+  min-height: 50px;
   display: flex;
   align-items: stretch;
+  backdrop-filter: blur(14px);
 }
 
 .scroll {
@@ -16,29 +17,30 @@
 
 .tab {
   border: 0;
-  border-right: 1px solid var(--border);
+  border-right: 1px solid rgba(77, 128, 134, 0.12);
   background: transparent;
   color: var(--text-secondary);
-  min-width: 150px;
+  min-width: 168px;
   max-width: 280px;
   padding: 0 12px;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   cursor: pointer;
   position: relative;
   transition: background 0.15s ease, color 0.15s ease;
 }
 
 .tab:hover {
-  background: rgba(201, 168, 76, 0.08);
+  background: rgba(47, 125, 134, 0.08);
   color: var(--text-primary);
 }
 
 .active {
-  background: var(--bg-base);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(246, 252, 250, 0.92));
   color: var(--text-primary);
-  box-shadow: inset 0 2px 0 var(--accent);
+  box-shadow: inset 0 3px 0 var(--accent), 0 10px 24px rgba(47, 125, 134, 0.08);
 }
 
 .icon {
@@ -59,8 +61,32 @@
   width: 6px;
   height: 6px;
   border-radius: 999px;
-  background: var(--accent);
+  background: var(--seal);
   flex: 0 0 auto;
+}
+
+.badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(92, 111, 114, 0.1);
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.badgeSuccess {
+  background: rgba(61, 142, 94, 0.13);
+  color: #357a51;
+}
+
+.badgeWarning {
+  background: rgba(182, 139, 67, 0.16);
+  color: #946f2e;
 }
 
 .close {
@@ -71,5 +97,5 @@
 }
 
 .close:hover {
-  color: var(--text-primary);
+  color: var(--seal);
 }

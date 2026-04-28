@@ -17,6 +17,7 @@ class WorldbuildingSection(BaseModel):
     name: str = ""
     description: str = ""
     generation_hint: str = ""
+    content: str = ""
     entries: list[WorldbuildingEntry] = Field(default_factory=list)
 
 

@@ -1,0 +1,23 @@
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Local environments
+venv/
+.venv/
+backend/venv/
+
+# Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Local generated project data
+backend/storage/projects/
+
+# Local editor/runtime settings
+.claude/settings.local.json

@@ -12,3 +12,8 @@ sse-starlette==2.1.3
 python-multipart==0.0.12
 zhipuai>=2.1.5.20250101
 tiktoken==0.7.0
+
+# Optional production AI orchestration stack. The app has a built-in fallback
+# runtime so local development can still start before these are installed.
+langgraph>=0.2.70
+litellm>=1.55.0

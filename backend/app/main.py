@@ -5,7 +5,7 @@ from app.config import get_settings
 from app.database import engine, Base
 import app.models  # noqa: F401 — 触发所有模型注册
 
-from app.routers import projects, outline, characters, worldbuilding, chapters, ai, volumes, admin, review
+from app.routers import projects, outline, characters, worldbuilding, chapters, ai, volumes, admin, review, validation, entities, prompts, assistant
 
 settings = get_settings()
 
@@ -34,15 +34,23 @@ def _ensure_schema():
             alter_sqls.append("ALTER TABLE outlines ADD COLUMN selling_points TEXT")
         if "main_plot" not in columns:
             alter_sqls.append("ALTER TABLE outlines ADD COLUMN main_plot LONGTEXT")
+        if "version_note" not in columns:
+            alter_sqls.append("ALTER TABLE outlines ADD COLUMN version_note VARCHAR(255)")
 
     if "characters" in tables:
         columns = {col["name"] for col in inspector.get_columns("characters")}
+        if "aliases" not in columns:
+            alter_sqls.append("ALTER TABLE characters ADD COLUMN aliases JSON")
         if "role" not in columns:
             alter_sqls.append("ALTER TABLE characters ADD COLUMN `role` VARCHAR(50)")
+        if "importance" not in columns:
+            alter_sqls.append("ALTER TABLE characters ADD COLUMN importance INTEGER DEFAULT 3")
         if "golden_finger" not in columns:
             alter_sqls.append("ALTER TABLE characters ADD COLUMN golden_finger TEXT")
         if "motivation" not in columns:
             alter_sqls.append("ALTER TABLE characters ADD COLUMN motivation TEXT")
+        if "profile_md" not in columns:
+            alter_sqls.append("ALTER TABLE characters ADD COLUMN profile_md TEXT")
 
     if "worldbuilding" in tables:
         columns = {col["name"] for col in inspector.get_columns("worldbuilding")}
@@ -102,6 +110,17 @@ def _ensure_schema():
         if "approved_at" not in columns:
             alter_sqls.append("ALTER TABLE synopses ADD COLUMN approved_at DATETIME")
 
+    if "ai_generation_jobs" in tables and engine.dialect.name == "mysql":
+        columns = {col["name"]: col for col in inspector.get_columns("ai_generation_jobs")}
+        job_type = str(columns.get("job_type", {}).get("type", ""))
+        if "assistant_workflow" not in job_type:
+            alter_sqls.append(
+                "ALTER TABLE ai_generation_jobs MODIFY COLUMN job_type "
+                "ENUM('outline','titles','book_synopsis','characters','worldbuilding',"
+                "'chapter_synopsis','chapter_content','volume_synopsis','chapter_segment',"
+                "'chat','assistant_workflow') NOT NULL"
+            )
+
     if not alter_sqls:
         return
     with engine.begin() as conn:
@@ -134,8 +153,17 @@ app.include_router(volumes.router)
 app.include_router(ai.router)
 app.include_router(admin.router)
 app.include_router(review.router)
+app.include_router(validation.router)
+app.include_router(entities.router)
+app.include_router(prompts.router)
+app.include_router(assistant.router)
 
 
 @app.get("/health")
 def health():
+    return {"status": "ok"}
+
+
+@app.get("/api/health")
+def api_health():
     return {"status": "ok"}

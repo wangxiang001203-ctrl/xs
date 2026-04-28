@@ -7,17 +7,25 @@ class GenerateOutlineRequest(BaseModel):
     idea: str
 
 
+class OutlineChatRequest(BaseModel):
+    novel_id: str
+    message: str
+    mode: Optional[str] = None
+
+
 class GenerateWorldbuildingRequest(BaseModel):
     novel_id: str
     outline_id: Optional[str] = None
     extra_instruction: Optional[str] = None
     current_worldbuilding: Optional[dict] = None
+    dry_run: bool = False
 
 
 class GenerateCharactersFromOutlineRequest(BaseModel):
     novel_id: str
     outline_id: Optional[str] = None
     genre: str = "玄幻修仙"
+    dry_run: bool = False
 
 
 class GenerateTitlesRequest(BaseModel):
@@ -28,6 +36,7 @@ class GenerateTitlesRequest(BaseModel):
 class GenerateBookSynopsisRequest(BaseModel):
     novel_id: str
     extra_instruction: Optional[str] = None
+    dry_run: bool = False
 
 
 class GenerateSynopsisRequest(BaseModel):
@@ -46,6 +55,7 @@ class GenerateChapterRequest(BaseModel):
     novel_id: str
     chapter_id: str
     extra_instruction: Optional[str] = None
+    dry_run: bool = False
 
 
 class ValidateSynopsisRequest(BaseModel):
@@ -69,6 +79,7 @@ class GenerateChapterSegmentRequest(BaseModel):
     segment: str
     prev_segment_text: Optional[str] = ""
     extra_instruction: Optional[str] = None
+    dry_run: bool = False
 
 
 class ChatMessage(BaseModel):
@@ -82,3 +93,4 @@ class ChatRequest(BaseModel):
     context_id: Optional[str] = None
     messages: list[ChatMessage]
     user_message: str
+    context_files: list[str] = []

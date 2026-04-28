@@ -1,13 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import Chapter, Synopsis
+from app.models import Chapter, EntityProposal, Synopsis
 from app.schemas.chapter import (
     ChapterCreate, ChapterUpdate, ChapterOut, ChapterContentOut,
     SynopsisCreate, SynopsisOut,
 )
 from app.services.file_service import save_chapter_content, save_chapter_plot_summary, save_chapter_synopsis
-from app.services.validator import validate_story_entities, validate_synopsis_characters
+from app.services.validator import validate_story_entities, validate_synopsis_characters, validate_chapter_content_entities
 
 router = APIRouter(prefix="/api/projects/{novel_id}/chapters", tags=["chapters"])
 
@@ -27,6 +27,16 @@ def list_chapters(novel_id: str, db: Session = Depends(get_db)):
 
 @router.post("", response_model=ChapterOut)
 def create_chapter(novel_id: str, data: ChapterCreate, db: Session = Depends(get_db)):
+    pending_proposal = db.query(EntityProposal).filter(
+        EntityProposal.novel_id == novel_id,
+        EntityProposal.status == "pending",
+    ).first()
+    if pending_proposal:
+        raise HTTPException(
+            400,
+            "当前作品还有待确认的 AI 角色/设定改动，请先在右侧 AI 工作详情中通过或放弃后再新建下一章。",
+        )
+
     exists = db.query(Chapter).filter(
         Chapter.novel_id == novel_id, Chapter.chapter_number == data.chapter_number
     ).first()
@@ -62,8 +72,16 @@ def update_chapter(novel_id: str, chapter_id: str, data: ChapterUpdate, db: Sess
 
     # 自动计算字数
     if "content" in update_data:
-        update_data["word_count"] = len(update_data["content"])
-        save_chapter_content(novel_id, chapter.chapter_number, update_data["content"])
+        content = update_data["content"]
+        update_data["word_count"] = len(content)
+
+        # 幻觉检测：验证正文中引用的实体是否存在
+        validation_result = validate_chapter_content_entities(db, novel_id, chapter_id, content)
+        if validation_result["has_hallucination"]:
+            # 不阻止保存，但记录警告
+            chapter.plot_summary = f"[警告] {'; '.join(validation_result['warnings'])}"
+
+        save_chapter_content(novel_id, chapter.chapter_number, content)
 
     for k, v in update_data.items():
         setattr(chapter, k, v)

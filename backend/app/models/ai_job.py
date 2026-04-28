@@ -37,6 +37,7 @@ class AIGenerationJob(Base):
             "volume_synopsis",
             "chapter_segment",
             "chat",
+            "assistant_workflow",
         ),
         nullable=False,
         comment="任务类型",

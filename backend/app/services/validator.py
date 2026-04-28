@@ -81,6 +81,10 @@ def collect_worldbuilding_entities(db: Session, novel_id: str) -> dict[str, set[
 
 
 def validate_story_entities(db: Session, novel_id: str, references: dict | None) -> dict[str, list[str]]:
+    """
+    验证细纲或正文中引用的实体是否存在
+    返回缺失的实体列表，用于幻觉检测
+    """
     references = references if isinstance(references, dict) else {}
     characters = validate_synopsis_characters(db, novel_id, references.get("characters") or [])
     world_entities = collect_worldbuilding_entities(db, novel_id)
@@ -101,4 +105,45 @@ def validate_story_entities(db: Session, novel_id: str, references: dict | None)
     return {
         "characters": characters["missing"],
         **missing_world,
+    }
+
+
+def validate_chapter_content_entities(db: Session, novel_id: str, chapter_id: str, content: str) -> dict:
+    """
+    验证章节正文中是否存在幻觉（引用不存在的实体）
+    返回 {"has_hallucination": bool, "missing_entities": dict, "warnings": list[str]}
+    """
+    from app.models import Chapter, Synopsis
+
+    chapter = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+    if not chapter:
+        return {"has_hallucination": False, "missing_entities": {}, "warnings": []}
+
+    synopsis = db.query(Synopsis).filter(Synopsis.chapter_id == chapter_id).first()
+    if not synopsis or not synopsis.referenced_entities:
+        return {"has_hallucination": False, "missing_entities": {}, "warnings": ["细纲未定义引用实体"]}
+
+    # 验证细纲中声明的实体是否存在
+    missing = validate_story_entities(db, novel_id, synopsis.referenced_entities)
+
+    has_hallucination = any(len(v) > 0 for v in missing.values())
+    warnings = []
+
+    if missing.get("characters"):
+        warnings.append(f"引用了不存在的角色: {', '.join(missing['characters'])}")
+    if missing.get("items"):
+        warnings.append(f"引用了不存在的道具: {', '.join(missing['items'])}")
+    if missing.get("factions"):
+        warnings.append(f"引用了不存在的势力: {', '.join(missing['factions'])}")
+    if missing.get("locations"):
+        warnings.append(f"引用了不存在的地点: {', '.join(missing['locations'])}")
+    if missing.get("rules"):
+        warnings.append(f"引用了不存在的规则: {', '.join(missing['rules'])}")
+    if missing.get("realms"):
+        warnings.append(f"引用了不存在的境界: {', '.join(missing['realms'])}")
+
+    return {
+        "has_hallucination": has_hallucination,
+        "missing_entities": missing,
+        "warnings": warnings,
     }

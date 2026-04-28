@@ -1,38 +1,42 @@
-/* 东方风主题 — 水墨色系 */
+/* 仙侠明亮主题 — 云山青玉 */
 :root {
-  --bg-base: #0d0d0d;
-  --bg-panel: #141414;
-  --bg-card: #1c1c1c;
-  --bg-hover: #242424;
-  --bg-active: #2a2a2a;
+  --bg-base: #edf7f6;
+  --bg-panel: rgba(255, 255, 255, 0.78);
+  --bg-card: rgba(255, 255, 255, 0.9);
+  --bg-hover: rgba(56, 129, 137, 0.09);
+  --bg-active: rgba(56, 129, 137, 0.16);
+  --bg-paper: rgba(255, 254, 248, 0.92);
 
-  --border: #2c2c2c;
-  --border-light: #383838;
+  --border: rgba(77, 128, 134, 0.2);
+  --border-light: rgba(77, 128, 134, 0.34);
 
-  --primary: #c0392b;
-  --primary-hover: #e74c3c;
-  --accent: #c9a84c;
-  --accent-light: #e8c96a;
+  --primary: #2f7d86;
+  --primary-hover: #246871;
+  --accent: #b68b43;
+  --accent-light: #d8b96d;
+  --jade: #72a99f;
+  --seal: #c45d4b;
 
-  --text-primary: #e0d8cc;
-  --text-secondary: #8a8070;
-  --text-muted: #4a4540;
-  --text-inverse: #0d0d0d;
+  --text-primary: #213c42;
+  --text-secondary: #536f73;
+  --text-muted: #8da1a1;
+  --text-inverse: #fffaf0;
 
-  --success: #27ae60;
-  --warning: #e67e22;
-  --error: #c0392b;
-  --info: #2980b9;
+  --success: #398b68;
+  --warning: #be7b26;
+  --error: #bd4d45;
+  --info: #367f9a;
 
-  --font-sans: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  --font-sans: 'LXGW WenKai Screen', 'STKaiti', 'KaiTi', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
 
-  --radius-sm: 3px;
-  --radius: 5px;
-  --radius-lg: 8px;
+  --radius-sm: 8px;
+  --radius: 14px;
+  --radius-lg: 22px;
 
-  --shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 4px 20px rgba(0, 0, 0, 0.6);
+  --shadow: 0 12px 34px rgba(42, 92, 99, 0.12);
+  --shadow-lg: 0 24px 70px rgba(42, 92, 99, 0.18);
+  --glass-blur: blur(18px);
 }
 
 * {
@@ -43,7 +47,10 @@
 
 html, body, #root {
   height: 100%;
-  background: var(--bg-base);
+  background:
+    linear-gradient(rgba(237, 247, 246, 0.2), rgba(237, 247, 246, 0.82)),
+    url('../assets/xianxia-mist.png') center / cover fixed no-repeat,
+    var(--bg-base);
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 13px;
@@ -55,6 +62,7 @@ html, body, #root {
 .ant-btn-primary {
   background: var(--primary) !important;
   border-color: var(--primary) !important;
+  box-shadow: 0 8px 20px rgba(47, 125, 134, 0.2) !important;
 }
 .ant-btn-primary:hover {
   background: var(--primary-hover) !important;
@@ -63,18 +71,18 @@ html, body, #root {
 
 /* 滚动条 */
 ::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
+  width: 7px;
+  height: 7px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--border-light);
-  border-radius: 2px;
+  background: rgba(66, 128, 136, 0.26);
+  border-radius: 999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-muted);
+  background: rgba(66, 128, 136, 0.45);
 }
 
 /* 通用卡片 */
@@ -83,6 +91,8 @@ html, body, #root {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 12px;
+  box-shadow: var(--shadow);
+  backdrop-filter: var(--glass-blur);
 }
 
 /* 标签 */
@@ -91,9 +101,9 @@ html, body, #root {
   padding: 1px 6px;
   border-radius: 2px;
   font-size: 11px;
-  background: rgba(201, 168, 76, 0.15);
+  background: rgba(182, 139, 67, 0.14);
   color: var(--accent);
-  border: 1px solid rgba(201, 168, 76, 0.3);
+  border: 1px solid rgba(182, 139, 67, 0.28);
 }
 
 .status-alive { color: var(--success); }

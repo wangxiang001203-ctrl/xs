@@ -25,7 +25,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "global_system": "你是一位专业的玄幻/修仙小说作家，擅长构建宏大世界观、塑造鲜明人物、编写引人入胜的剧情。",
         "outline_generation": (
             "你是一位资深玄幻修仙编辑，请输出可直接用于立项和连载的完整小说企划。\n"
-            "重点：书名草案、简介草案、读者卖点、主角与核心角色、世界观种子、分卷推进、总字数与分卷字数分配。"
+            "重点：书名草案、简介草案、读者卖点、主角与核心角色、世界观种子、分卷推进、总字数与分卷字数分配。\n"
+            "如果当前作品名是默认占位名，不要参考作品名，只根据作者输入的想法生成。"
         ),
         "titles_generation": (
             "你是一位网文编辑。请基于已确认大纲输出10个中文书名候选。\n"
@@ -50,6 +51,33 @@ DEFAULT_CONFIG: dict[str, Any] = {
                     {"id": "ep-20260421221056-qvrjw", "name": KNOWN_MODEL_LABELS["ep-20260421221056-qvrjw"]},
                 ],
             }
+        ],
+    },
+    "assistant_policy": {
+        "agent_engine": {
+            "runtime": "langgraph_optional",
+            "model_gateway": "openai_compatible",
+            "structured_output": "pydantic_with_repair",
+            "memory_source": "project_owned_files",
+        },
+        "require_approval_before_write": True,
+        "allow_delete": False,
+        "default_read_kinds": {
+            "outline": ["outline"],
+            "worldbuilding": ["outline", "characters", "worldbuilding", "worldbuilding_section"],
+            "chapter": ["chapter_synopsis", "chapter_content", "chapter_memory", "characters", "worldbuilding", "worldbuilding_section", "volume"],
+        },
+        "default_write_targets": {
+            "outline": ["outline_draft"],
+            "worldbuilding": ["current_worldbuilding_section_draft"],
+            "chapter": ["chapter_content_draft", "entity_proposals", "chapter_memory_after_approval"],
+        },
+        "after_final_chapter_updates": [
+            "chapter_memory",
+            "entity_mentions",
+            "character_state_events",
+            "item_ownership_events",
+            "open_threads",
         ],
     },
 }
@@ -133,6 +161,7 @@ def _normalize_config(data: dict[str, Any]) -> dict[str, Any]:
         "flow": data.get("flow") or DEFAULT_CONFIG["flow"],
         "prompts": data.get("prompts") or DEFAULT_CONFIG["prompts"],
         "model_config": _normalize_model_config(data.get("model_config")),
+        "assistant_policy": data.get("assistant_policy") or DEFAULT_CONFIG["assistant_policy"],
     }
 
 

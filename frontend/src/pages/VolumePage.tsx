@@ -1,13 +1,13 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, Collapse, Input, Space, Spin, Tag, message } from 'antd'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Alert, Button, Space, Spin, Tag, message } from 'antd'
 import { CheckOutlined, SaveOutlined, ThunderboltOutlined } from '@ant-design/icons'
 
 import { api } from '../api'
 import { useAppStore } from '../store'
 import type { VolumeWorkspace } from '../types'
+import WritingToolbar from '../components/editor/WritingToolbar'
+import NovelEditor, { type NovelEditorHandle } from '../components/editor/NovelEditor'
 import styles from './VolumePage.module.css'
-
-const { TextArea } = Input
 
 interface ChapterOutlineDraft {
   chapterId: string
@@ -17,6 +17,42 @@ interface ChapterOutlineDraft {
   status: string
   finalApproved: boolean
   synopsisReviewStatus: string
+}
+
+const CHINESE_DIGITS: Record<string, number> = {
+  零: 0,
+  〇: 0,
+  一: 1,
+  二: 2,
+  两: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+  七: 7,
+  八: 8,
+  九: 9,
+}
+
+const CHAPTER_NUMBER_PATTERN = '[0-9零〇一二两三四五六七八九十百千]+'
+
+function parseChapterNumber(raw: string) {
+  const text = raw.trim()
+  if (/^\d+$/.test(text)) return Number(text)
+  let result = 0
+  let current = 0
+  for (const char of text) {
+    if (char === '千' || char === '百' || char === '十') {
+      const unit = char === '千' ? 1000 : char === '百' ? 100 : 10
+      result += (current || 1) * unit
+      current = 0
+      continue
+    }
+    if (char in CHINESE_DIGITS) {
+      current = CHINESE_DIGITS[char]
+    }
+  }
+  return result + current
 }
 
 function getChapterHeading(chapterNumber: number, title?: string) {
@@ -29,7 +65,7 @@ function normalizeChapterTitle(chapterNumber: number, title?: string) {
   const defaultTitle = `第${chapterNumber}章`
   return (title || '')
     .trim()
-    .replace(new RegExp(`^第\\s*${chapterNumber}\\s*章\\s*[：:、\\-—]?\\s*`), '')
+    .replace(new RegExp(`^第\\s*${CHAPTER_NUMBER_PATTERN}\\s*章\\s*[：:、\\-—]?\\s*`), '')
     .trim() || defaultTitle
 }
 
@@ -38,8 +74,9 @@ function stripChapterHeading(content: string, chapterNumber: number) {
   const firstContentIndex = lines.findIndex(line => line.trim())
   if (firstContentIndex === -1) return ''
   const firstLine = lines[firstContentIndex].trim()
-  const headingPattern = new RegExp(`^#{0,6}\\s*第\\s*${chapterNumber}\\s*章(?:\\s|$|[：:、\\-—])`)
-  if (!headingPattern.test(firstLine)) {
+  const headingPattern = new RegExp(`^#{0,6}\\s*第\\s*(${CHAPTER_NUMBER_PATTERN})\\s*章(?:\\s|$|[：:、\\-—])`)
+  const match = firstLine.match(headingPattern)
+  if (!match || parseChapterNumber(match[1]) !== chapterNumber) {
     return content.trim()
   }
   return [
@@ -65,10 +102,14 @@ function parseVolumePlanMarkdown(markdown: string) {
   }
 
   for (const line of lines) {
-    const match = line.match(/^\s{0,3}#{0,6}\s*第\s*(\d+)\s*章\s*(.*)$/)
+    const match = line.match(new RegExp(`^\\s{0,3}#{0,6}\\s*第\\s*(${CHAPTER_NUMBER_PATTERN})\\s*章\\s*(.*)$`))
     if (match) {
+      const nextNumber = parseChapterNumber(match[1])
+      if (!Number.isFinite(nextNumber) || nextNumber <= 0) {
+        continue
+      }
       flush()
-      currentNumber = Number(match[1])
+      currentNumber = nextNumber
       currentTitle = match[2]?.trim() || ''
       buffer = []
       continue
@@ -79,6 +120,10 @@ function parseVolumePlanMarkdown(markdown: string) {
   }
   flush()
   return result
+}
+
+function getParsedChapterNumbers(markdown: string) {
+  return [...parseVolumePlanMarkdown(markdown).keys()].sort((a, b) => a - b)
 }
 
 function buildChapterOutlineDrafts(workspace: VolumeWorkspace, markdown: string): ChapterOutlineDraft[] {
@@ -143,6 +188,8 @@ export default function VolumePage() {
   const [saving, setSaving] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [approving, setApproving] = useState(false)
+  const [searchValue, setSearchValue] = useState('')
+  const editorRef = useRef<NovelEditorHandle>(null)
   const docKey = currentVolume ? `volume:${currentVolume.id}` : null
 
   useEffect(() => {
@@ -154,6 +201,9 @@ export default function VolumePage() {
   useEffect(() => {
     if (!docKey) return
     patchDocumentDraft(docKey, { planMarkdown })
+    if (workspace) {
+      setChapterOutlines(buildChapterOutlineDrafts(workspace, planMarkdown))
+    }
   }, [docKey, planMarkdown])
 
   async function loadWorkspace(draftPlan?: string) {
@@ -193,7 +243,7 @@ export default function VolumePage() {
       setChapters(chapterList)
       message.success('分卷细纲已保存，并已同步到对应章节')
     } catch (err: any) {
-      message.error(err?.response?.data?.detail || '保存失败')
+      message.error(err?.response?.data?.detail || err?.message || '保存失败')
     } finally {
       setSaving(false)
     }
@@ -247,7 +297,7 @@ export default function VolumePage() {
       setChapters(chapterList)
       message.success('本卷节奏已批准，可以开始逐章创作')
     } catch (err: any) {
-      message.error(err?.response?.data?.detail || '审批失败')
+      message.error(err?.response?.data?.detail || err?.message || '审批失败')
     } finally {
       setApproving(false)
     }
@@ -255,12 +305,21 @@ export default function VolumePage() {
 
   function buildPlanUpdatePayload() {
     if (!workspace) return null
-    const nextPlanMarkdown = buildVolumePlanMarkdown(workspace.volume, chapterOutlines)
+    const latestOutlines = buildChapterOutlineDrafts(workspace, planMarkdown)
+    const parsedNumbers = getParsedChapterNumbers(planMarkdown)
+    if (workspace.chapters.length && parsedNumbers.length !== workspace.chapters.length) {
+      throw new Error(`当前文本里识别到 ${parsedNumbers.length} 章，但本卷已有 ${workspace.chapters.length} 章。请保持每一章都有“第X章”标题。`)
+    }
+    const emptyChapter = latestOutlines.find(item => !item.content.trim())
+    if (emptyChapter) {
+      throw new Error(`第${emptyChapter.chapterNumber}章还没有细纲内容，不能保存/审批。`)
+    }
+    const nextPlanMarkdown = planMarkdown.trim() || buildVolumePlanMarkdown(workspace.volume, latestOutlines)
     return {
       planMarkdown: nextPlanMarkdown,
       payload: {
         plan_markdown: nextPlanMarkdown,
-        chapter_synopses: chapterOutlines.map(chapter => ({
+        chapter_synopses: latestOutlines.map(chapter => ({
           chapter_id: chapter.chapterId,
           title: normalizeChapterTitle(chapter.chapterNumber, chapter.title),
           summary_line: chapter.content.trim().split(/\r?\n/).find(Boolean)?.slice(0, 120) || '',
@@ -279,59 +338,6 @@ export default function VolumePage() {
     () => [...(workspace?.chapters || [])].sort((a, b) => a.chapter_number - b.chapter_number),
     [workspace?.chapters],
   )
-
-  function updateChapterOutline(chapterId: string, content: string) {
-    if (!workspace) return
-    const nextOutlines = chapterOutlines.map(item => (
-      item.chapterId === chapterId ? { ...item, content } : item
-    ))
-    setChapterOutlines(nextOutlines)
-    setPlanMarkdown(buildVolumePlanMarkdown(workspace.volume, nextOutlines))
-  }
-
-  function buildChapterCollapseItems() {
-    return chapterOutlines.map((chapter) => {
-      const chapterNumber = chapter.chapterNumber
-      const sourceChapter = orderedWorkspaceChapters.find(item => item.id === chapter.chapterId)
-      const synopsisApproved = Boolean(chapter.content.trim()) && chapter.synopsisReviewStatus === 'approved'
-      const lockedByPrevious = !canOpenChapterContent(chapterNumber)
-      const canWrite = volumeApproved && synopsisApproved && !lockedByPrevious
-      return {
-        key: chapter.chapterId,
-        label: (
-          <div className={styles.chapterPanelLabel}>
-            <span>{getChapterHeading(chapterNumber, chapter.title)}</span>
-            <span className={styles.chapterPanelMeta}>{chapter.content.trim().length || 0} 字</span>
-          </div>
-        ),
-        extra: (
-          <Space size={6} onClick={event => event.stopPropagation()}>
-            <Tag color={chapter.content.trim() ? 'green' : 'orange'}>
-              {chapter.content.trim() ? '有细纲' : '待补'}
-            </Tag>
-            <Button
-              size="small"
-              disabled={!sourceChapter || !canWrite}
-              onClick={() => sourceChapter && openChapterForWriting(sourceChapter)}
-            >
-              写正文
-            </Button>
-          </Space>
-        ),
-        children: (
-          <div className={styles.chapterPanelBody}>
-            <TextArea
-              value={chapter.content}
-              onChange={event => updateChapterOutline(chapter.chapterId, event.target.value)}
-              autoSize={{ minRows: 7, maxRows: 18 }}
-              className={styles.chapterOutlineEditor}
-              placeholder={`写第${chapterNumber}章的一整块细纲：本章目标、关键事件、冲突推进、爽点/转折、章末钩子。`}
-            />
-          </div>
-        ),
-      }
-    })
-  }
 
   function canOpenChapterContent(chapterNumber: number) {
     if (chapterNumber <= 1) return true
@@ -411,56 +417,64 @@ export default function VolumePage() {
       ) : null}
 
       <div className={styles.content}>
-        <Card
-          title={`第${currentVolume.volume_number}卷章节细纲`}
-          className={styles.planCard}
-          extra={<span className={styles.planHint}>按章节折叠审阅，章数跟随本卷数据，不固定 40 章。</span>}
-        >
-          {chapterOutlines.length ? (
-            <Collapse
-              className={styles.chapterCollapse}
-              items={buildChapterCollapseItems()}
-              defaultActiveKey={chapterOutlines.slice(0, 3).map(item => item.chapterId)}
+        {!volumeApproved ? (
+          <section className={styles.editorShell}>
+            <WritingToolbar
+              title={`第${currentVolume.volume_number}卷细纲`}
+              wordCount={planMarkdown.length}
+              statusText="本地草稿会自动保留，保存后同步到章节细纲"
+              searchValue={searchValue}
+              searchCount={searchValue.trim() ? planMarkdown.split(searchValue.trim()).length - 1 : 0}
+              onSearchChange={setSearchValue}
+              onUndo={() => editorRef.current?.undo()}
+              onRedo={() => editorRef.current?.redo()}
             />
-          ) : (
-            <div className={styles.emptyPlan}>
-              当前分卷还没有章节。点击“生成本卷全部细纲”后，会按本卷计划章数先创建章节，再一次性生成整卷细纲。
+            <NovelEditor
+              ref={editorRef}
+              value={planMarkdown}
+              onChange={setPlanMarkdown}
+              searchValue={searchValue}
+              placeholder={`按固定格式写完整卷节奏：\n\n# 第${currentVolume.volume_number}卷 ${workspace?.volume.title || currentVolume.title}\n\n本卷概述：\n这里写本卷主线、核心矛盾、高潮和卷末钩子。\n\n第1章 章节标题\n这一章完整细纲写成一整块：本章目标、关键事件、冲突推进、爽点/转折、章末钩子。\n\n第2章 章节标题\n继续写下一章。`}
+            />
+          </section>
+        ) : (
+          <section className={styles.approvedShell}>
+            <div className={styles.approvedHeader}>
+              <div>
+                <strong>本卷已确认，按顺序写正文</strong>
+                <span>点击可写章节进入正文。上一章未人工定稿时，下一章会保持锁定。</span>
+              </div>
+              <Tag color="green">已锁定节奏</Tag>
             </div>
-          )}
-        </Card>
-        <aside className={styles.chapterRail}>
-          <div className={styles.railTitle}>章节写作入口</div>
-          <div className={styles.railHint}>
-            先确认整卷节奏，再点具体章节进入正文。已开写章节对应的细纲不能从卷计划中删除。
-          </div>
-          <div className={styles.chapterList}>
-            {orderedWorkspaceChapters.length ? orderedWorkspaceChapters.map(item => {
-              const lockedByPrevious = !canOpenChapterContent(item.chapter_number)
-              const synopsisApproved = Boolean(item.content_md?.trim()) && item.synopsis_review_status === 'approved'
-              const disabled = !volumeApproved || !synopsisApproved || lockedByPrevious
-              const defaultTitle = `第${item.chapter_number}章`
-              const displayTitle = !item.title || item.title === defaultTitle ? defaultTitle : `${defaultTitle} ${item.title}`
-              return (
-                <button
-                  type="button"
-                  key={item.id}
-                  className={styles.chapterEntry}
-                  disabled={disabled}
-                  onClick={() => openChapterForWriting(item)}
-                >
-                  <span className={styles.chapterEntryTitle}>
-                    {displayTitle}
-                  </span>
-                  <span className={styles.chapterEntryMeta}>
-                    {item.final_approved ? '已定稿' : lockedByPrevious ? '等上一章定稿' : synopsisApproved ? '可写作' : '细纲待确认'}
-                  </span>
-                </button>
-              )
-            }) : (
-              <div className={styles.emptyRail}>生成本卷细纲后，这里会出现逐章写作入口。</div>
-            )}
-          </div>
-        </aside>
+            <div className={styles.chapterRows}>
+              {orderedWorkspaceChapters.map(item => {
+                const lockedByPrevious = !canOpenChapterContent(item.chapter_number)
+                const synopsisApproved = Boolean(item.content_md?.trim()) && item.synopsis_review_status === 'approved'
+                const disabled = !synopsisApproved || lockedByPrevious
+                const defaultTitle = `第${item.chapter_number}章`
+                const displayTitle = !item.title || item.title === defaultTitle ? defaultTitle : `${defaultTitle} ${item.title}`
+                return (
+                  <button
+                    type="button"
+                    key={item.id}
+                    className={styles.chapterRow}
+                    disabled={disabled}
+                    onClick={() => openChapterForWriting(item)}
+                  >
+                    <span className={styles.chapterRowTitle}>{displayTitle}</span>
+                    <span className={styles.chapterRowSummary}>{item.content_preview || item.summary_line || '本章细纲已确认'}</span>
+                    <Tag color={item.final_approved ? 'green' : lockedByPrevious ? 'default' : synopsisApproved ? 'processing' : 'orange'}>
+                      {item.final_approved ? '已定稿' : lockedByPrevious ? '未解锁' : synopsisApproved ? '去写正文' : '细纲待确认'}
+                    </Tag>
+                  </button>
+                )
+              })}
+              {!orderedWorkspaceChapters.length ? (
+                <div className={styles.emptyPlan}>本卷还没有章节。</div>
+              ) : null}
+            </div>
+          </section>
+        )}
       </div>
     </div>
   )

@@ -12,6 +12,7 @@ export default function AdminWorkflowPage() {
   const [flow, setFlow] = useState<FlowNode[]>([])
   const [prompts, setPrompts] = useState<Record<string, string>>({})
   const [modelConfig, setModelConfig] = useState<ModelConfig | null>(null)
+  const [assistantPolicyText, setAssistantPolicyText] = useState('')
 
   useEffect(() => {
     ;(async () => {
@@ -20,6 +21,7 @@ export default function AdminWorkflowPage() {
         setFlow(data.flow || [])
         setPrompts(data.prompts || {})
         setModelConfig(data.model_config || null)
+        setAssistantPolicyText(JSON.stringify(data.assistant_policy || {}, null, 2))
       } catch {
         message.error('加载后台流程配置失败')
       } finally {
@@ -31,14 +33,24 @@ export default function AdminWorkflowPage() {
   async function saveConfig() {
     setSaving(true)
     try {
+      let assistantPolicy: Record<string, any> = {}
+      try {
+        assistantPolicy = assistantPolicyText.trim() ? JSON.parse(assistantPolicyText) : {}
+      } catch {
+        message.error('AI 助手策略不是合法 JSON')
+        setSaving(false)
+        return
+      }
       const res = await api.admin.updateWorkflowConfig({
         flow,
         prompts,
         model_config: modelConfig || { active_provider: '', active_model: '', providers: [] },
+        assistant_policy: assistantPolicy,
       })
       setFlow(res.flow || [])
       setPrompts(res.prompts || {})
       setModelConfig(res.model_config || null)
+      setAssistantPolicyText(JSON.stringify(res.assistant_policy || {}, null, 2))
       message.success('流程与提示词已保存')
     } catch {
       message.error('保存失败')
@@ -109,6 +121,24 @@ export default function AdminWorkflowPage() {
           />
         </Card>
       )}
+
+      <Card className={styles.card} title="AI 助手文件策略">
+        <Input.TextArea
+          value={assistantPolicyText}
+          onChange={event => setAssistantPolicyText(event.target.value)}
+          autoSize={{ minRows: 10, maxRows: 22 }}
+          className={styles.jsonEditor}
+        />
+        <Alert
+          type="warning"
+          showIcon
+          className={styles.tip}
+          message="这里配置 AI 默认读取哪些文件、允许生成哪些待确认改动。删除权限默认关闭，写入必须走作者确认。"
+        />
+        <Button type="primary" loading={saving} onClick={saveConfig}>
+          保存 AI 助手策略
+        </Button>
+      </Card>
     </div>
   )
 }

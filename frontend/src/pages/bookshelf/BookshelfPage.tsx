@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Form, Input, Modal, Select, Spin, Tag, message } from 'antd'
+import { Button, Form, Modal, Select, Spin, Tag, message } from 'antd'
 import { BookOutlined, PlusOutlined, SettingOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 
@@ -77,10 +77,23 @@ export default function BookshelfPage() {
     navigate('/editor/admin')
   }
 
-  async function createNovel(values: { title: string; genre: string }) {
+  function getNextDefaultTitle() {
+    const used = new Set<number>()
+    novels.forEach((novel) => {
+      const match = /^默认书名(\d+)$/.exec(novel.title.trim())
+      if (match) used.add(Number(match[1]))
+    })
+
+    let next = 1
+    while (used.has(next)) next += 1
+    return `默认书名${next}`
+  }
+
+  async function createNovel(values: { genre: string }) {
     setCreating(true)
     try {
-      const novel = await api.novels.create(values)
+      const defaultTitle = getNextDefaultTitle()
+      const novel = await api.novels.create({ ...values, title: defaultTitle })
       setNovels(prev => [novel, ...prev])
       setCreateOpen(false)
       form.resetFields()
@@ -104,19 +117,26 @@ export default function BookshelfPage() {
 
   return (
     <div className={styles.page}>
-      <header className={styles.hero}>
-        <div>
-          <div className={styles.brand}>墨笔书架</div>
-          <h1>先选一本书，再进入编辑器。</h1>
-          <p>书架只管理作品，编辑器只处理单本书的创作结构，后面扩展封面、分类、搜索都会更干净。</p>
+      <nav className={styles.topNav}>
+        <div className={styles.navBrand}>
+          <span>墨笔</span>
+          <small>书架</small>
         </div>
-        <div className={styles.heroActions}>
+        <div className={styles.navActions}>
           <Button icon={<SettingOutlined />} onClick={openAdmin}>
             后台流程配置
           </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
             新建作品
           </Button>
+        </div>
+      </nav>
+
+      <header className={styles.hero}>
+        <div>
+          <div className={styles.brand}>墨笔书架</div>
+          <h1>先选一本书，再进入编辑器。</h1>
+          <p>书架只管理作品，编辑器只处理单本书的创作结构，后面扩展封面、分类、搜索都会更干净。</p>
         </div>
       </header>
 
@@ -206,9 +226,6 @@ export default function BookshelfPage() {
         confirmLoading={creating}
       >
         <Form form={form} layout="vertical" onFinish={createNovel}>
-          <Form.Item name="title" label="书名" rules={[{ required: true, message: '请输入书名' }]}>
-            <Input placeholder="请输入书名" />
-          </Form.Item>
           <Form.Item name="genre" label="类型" initialValue="玄幻修仙">
             <Select options={[
               { value: '玄幻修仙', label: '玄幻修仙' },
@@ -217,6 +234,9 @@ export default function BookshelfPage() {
               { value: '历史', label: '历史' },
             ]} />
           </Form.Item>
+          <p style={{ fontSize: '12px', color: '#999', marginTop: '-8px' }}>
+            书名将自动生成为“默认书名1”“默认书名2”等，生成大纲时不会参考这个临时书名。
+          </p>
         </Form>
       </Modal>
     </div>

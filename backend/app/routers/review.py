@@ -18,6 +18,7 @@ from app.services.review_service import (
     save_all_proposals,
     serialize_proposal,
 )
+from app.services.entity_service import bootstrap_entities_from_existing, scan_chapter_mentions
 
 router = APIRouter(prefix="/api/projects/{novel_id}/review", tags=["review"])
 
@@ -129,8 +130,38 @@ async def approve_final_chapter(novel_id: str, chapter_id: str, db: Session = De
     chapter.final_approved_at = datetime.utcnow()
     chapter.plot_summary = synopsis.plot_summary_update or chapter.plot_summary
     db.commit()
+
+    # 生成章节记忆
     memory = await build_chapter_memory(db, chapter, synopsis)
+    # 确定性实体索引兜底：不依赖 AI，按实体名/别名扫描当前定稿章节。
+    bootstrap_entities_from_existing(db, novel_id)
+    scan_chapter_mentions(db, novel_id, chapter)
     db.commit()
+
+    # 自动更新角色状态（定稿后触发）
+    if memory and memory.state_changes:
+        from app.services.review_service import _apply_character_updates
+        character_updates = []
+        for change in memory.state_changes:
+            # 解析状态变化，提取角色更新信息
+            # 格式示例: "张三突破到筑基期" / "李四获得法宝【玄铁剑】"
+            if isinstance(change, str):
+                # 简单解析逻辑，实际可以更复杂
+                if "突破" in change or "晋升" in change:
+                    parts = change.split("突破到")
+                    if len(parts) == 2:
+                        character_updates.append({
+                            "name": parts[0].strip(),
+                            "realm": parts[1].strip(),
+                        })
+                elif "获得" in change and ("法宝" in change or "功法" in change):
+                    # 提取角色名和物品
+                    pass  # 可以进一步实现
+
+        if character_updates:
+            _apply_character_updates(db, novel_id, chapter.chapter_number, character_updates)
+            db.commit()
+
     if chapter.plot_summary:
         append_plot_summary(novel_id, chapter.chapter_number, chapter.title or "", chapter.plot_summary)
         save_chapter_plot_summary(novel_id, chapter.chapter_number, chapter.plot_summary)

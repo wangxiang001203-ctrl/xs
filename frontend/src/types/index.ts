@@ -22,6 +22,35 @@ export interface Outline {
   ai_generated: boolean
   confirmed: boolean
   version: number
+  version_note?: string | null
+  created_at: string
+}
+
+export interface OutlineDraft {
+  title?: string
+  synopsis?: string
+  selling_points?: string
+  main_plot?: string
+  content?: string
+  base_outline_id?: string | null
+  base_version?: number
+  target_version?: number
+  mode?: 'revise' | 'rewrite' | string
+}
+
+export interface OutlineChatResult {
+  saved: boolean
+  outline?: Outline
+  draft_outline?: OutlineDraft
+}
+
+export interface OutlineChatMessage {
+  id: string
+  novel_id: string
+  outline_id?: string | null
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  metadata?: Record<string, any>
   created_at: string
 }
 
@@ -29,7 +58,9 @@ export interface Character {
   id: string
   novel_id: string
   name: string
+  aliases?: string[]
   role?: string
+  importance?: number
   gender?: string
   age?: number
   race?: string
@@ -43,6 +74,7 @@ export interface Character {
   background?: string
   golden_finger?: string
   motivation?: string
+  profile_md?: string
   relationships?: Relationship[]
   status: 'alive' | 'dead' | 'unknown'
   first_appearance_chapter?: number
@@ -82,6 +114,7 @@ export interface WorldbuildingSection {
   name: string
   description?: string
   generation_hint?: string
+  content?: string
   entries: WorldbuildingEntry[]
 }
 
@@ -186,6 +219,17 @@ export interface Chapter {
   updated_at: string
 }
 
+export interface ChapterDraftResult {
+  chapter_id: string
+  chapter_number: number
+  title?: string
+  content: string
+  word_count: number
+  dry_run: boolean
+  proposals_created?: number
+  pending_proposals?: EntityProposal[]
+}
+
 export interface Synopsis {
   id: string
   chapter_id: string
@@ -223,6 +267,71 @@ export interface ChapterMemory {
   proposed_entities: Array<{ type: string; name: string }>
   open_threads: string[]
   source_excerpt?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface StoryEntity {
+  id: string
+  novel_id: string
+  entity_type: string
+  name: string
+  aliases?: string[]
+  summary?: string
+  body_md?: string
+  tags?: string[]
+  current_state?: Record<string, any>
+  status: string
+  first_appearance_chapter?: number | null
+  created_at: string
+  updated_at: string
+}
+
+export interface EntityMention {
+  id: string
+  novel_id: string
+  entity_id: string
+  chapter_id?: string | null
+  chapter_number?: number | null
+  mention_text: string
+  source: 'exact_match' | 'alias_match' | 'ai_inferred' | 'manual' | string
+  confidence: number
+  evidence_text?: string | null
+  created_at: string
+}
+
+export interface EntityEvent {
+  id: string
+  novel_id: string
+  entity_id: string
+  event_type: string
+  chapter_id?: string | null
+  chapter_number?: number | null
+  title?: string | null
+  from_state?: Record<string, any>
+  to_state?: Record<string, any>
+  delta?: Record<string, any>
+  source: string
+  confidence: number
+  evidence_text?: string | null
+  reason?: string | null
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export interface EntityRelation {
+  id: string
+  novel_id: string
+  source_entity_id: string
+  target_entity_id?: string | null
+  target_name?: string | null
+  relation_type: string
+  start_chapter?: number | null
+  end_chapter?: number | null
+  properties?: Record<string, any>
+  evidence_text?: string | null
+  status: string
   created_at: string
   updated_at: string
 }
@@ -284,6 +393,7 @@ export interface WorkflowConfig {
   flow: Array<{ id: string; name: string; next: string }>
   prompts: Record<string, string>
   model_config: ModelConfig
+  assistant_policy?: Record<string, any>
 }
 
 export interface AIGenerationJob<T = any> {
@@ -300,5 +410,58 @@ export interface AIGenerationJob<T = any> {
   created_at: string
   started_at?: string | null
   finished_at?: string | null
+  updated_at: string
+}
+
+export interface AssistantContextFile {
+  id: string
+  label: string
+  path: string
+  kind: string
+}
+
+export interface AssistantQuestion {
+  question: string
+  options: string[]
+}
+
+export interface AssistantWorkflowStep {
+  id: string
+  step_order: number
+  title: string
+  status: string
+  detail?: string | null
+  files?: AssistantContextFile[]
+  payload?: Record<string, any>
+  created_at?: string | null
+  finished_at?: string | null
+}
+
+export interface AssistantChatResult {
+  message: string
+  mode?: 'clarify' | 'answer' | string
+  questions?: AssistantQuestion[]
+  context_files?: AssistantContextFile[]
+  search_terms?: string[]
+  changed_files?: Array<AssistantContextFile & { status?: string }>
+  pending_proposals?: EntityProposal[]
+  workflow_run_id?: string
+  workflow_steps?: AssistantWorkflowStep[]
+  intent?: string
+  confidence?: number
+  outline_result?: OutlineChatResult
+  outline?: Outline
+  draft_outline?: Record<string, any>
+  synopsis_draft?: string
+}
+
+export interface PromptSnippet {
+  id: string
+  novel_id?: string | null
+  scope: 'common' | 'project' | string
+  title: string
+  description?: string | null
+  content: string
+  created_at: string
   updated_at: string
 }

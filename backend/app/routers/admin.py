@@ -10,6 +10,7 @@ class WorkflowConfigPayload(BaseModel):
     flow: list[dict]
     prompts: dict[str, str]
     llm_settings: dict | None = Field(default=None, alias="model_config")
+    assistant_policy: dict | None = None
 
     model_config = {
         "populate_by_name": True,
@@ -28,5 +29,6 @@ def update_config(payload: WorkflowConfigPayload):
         "flow": payload.flow,
         "prompts": payload.prompts,
         "model_config": payload.llm_settings,
+        "assistant_policy": payload.assistant_policy,
     }
     return save_workflow_config(data)

@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Input, Space, Tag, message } from 'antd'
-import { CheckOutlined, SaveOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { Alert, Button, Collapse, Input, Modal, Space, Tag, message } from 'antd'
+import { CheckOutlined, SaveOutlined, ThunderboltOutlined, FileTextOutlined } from '@ant-design/icons'
 
 import { api } from '../api'
 import { useAppStore } from '../store'
 import type { Synopsis } from '../types'
+import WritingToolbar from '../components/editor/WritingToolbar'
 import styles from './ChapterPage.module.css'
 
 const { TextArea } = Input
@@ -28,6 +29,8 @@ export default function ChapterPage() {
   const [generatingContent, setGeneratingContent] = useState(false)
   const [savingContent, setSavingContent] = useState(false)
   const [approvingChapter, setApprovingChapter] = useState(false)
+  const [searchValue, setSearchValue] = useState('')
+  const [compareOpen, setCompareOpen] = useState(false)
   const docKey = currentChapter ? `chapter:${currentChapter.id}` : null
 
   const previousChapter = useMemo(() => {
@@ -80,6 +83,10 @@ export default function ChapterPage() {
   ].filter(Boolean) as string[]
 
   const canGenerateContent = gateWarnings.length === 0
+  const searchCount = useMemo(() => {
+    if (!searchValue.trim()) return 0
+    return content.split(searchValue.trim()).length - 1
+  }, [content, searchValue])
 
   function syncChapter(chapterData: NonNullable<typeof currentChapter>) {
     setCurrentChapter(chapterData)
@@ -95,11 +102,15 @@ export default function ChapterPage() {
     }
     setGeneratingContent(true)
     try {
-      const generated = await api.ai.generateChapter(currentNovel.id, currentChapter.id)
-      if (docKey) clearDocumentDraft(docKey)
-      syncChapter(generated)
+      const generated = await api.ai.generateChapterDraft(currentNovel.id, currentChapter.id)
       setContent(generated.content || '')
-      message.success('整章正文已生成')
+      if (docKey) {
+        patchDocumentDraft(docKey, {
+          content: generated.content || '',
+          updatedAt: new Date().toISOString(),
+        })
+      }
+      message.success('AI 正文草稿已放入编辑器，确认后再保存或定稿')
     } catch (err: any) {
       message.error(err?.response?.data?.detail || '生成失败')
     } finally {
@@ -186,8 +197,89 @@ export default function ChapterPage() {
       ))}
 
       <div className={styles.main}>
+        {synopsis && (
+          <aside className={styles.synopsisPanel}>
+            <Collapse
+              defaultActiveKey={['synopsis']}
+              items={[
+                {
+                  key: 'synopsis',
+                  label: (
+                    <Space>
+                      <FileTextOutlined />
+                      <span>细纲参考</span>
+                      <Tag color={synopsis.review_status === 'approved' ? 'green' : 'orange'} style={{ marginLeft: 8 }}>
+                        {synopsis.review_status === 'approved' ? '已批准' : '待审批'}
+                      </Tag>
+                    </Space>
+                  ),
+                  children: (
+                    <div className={styles.synopsisContent}>
+                      {synopsis.summary_line && (
+                        <div className={styles.synopsisSection}>
+                          <div className={styles.synopsisLabel}>本章摘要</div>
+                          <div className={styles.synopsisText}>{synopsis.summary_line}</div>
+                        </div>
+                      )}
+                      {synopsis.opening_scene && (
+                        <div className={styles.synopsisSection}>
+                          <div className={styles.synopsisLabel}>开场场景</div>
+                          <div className={styles.synopsisText}>{synopsis.opening_scene}</div>
+                        </div>
+                      )}
+                      {synopsis.opening_hook && (
+                        <div className={styles.synopsisSection}>
+                          <div className={styles.synopsisLabel}>开场钩子</div>
+                          <div className={styles.synopsisText}>{synopsis.opening_hook}</div>
+                        </div>
+                      )}
+                      {synopsis.development_events && synopsis.development_events.length > 0 && (
+                        <div className={styles.synopsisSection}>
+                          <div className={styles.synopsisLabel}>发展事件</div>
+                          <ul className={styles.synopsisList}>
+                            {synopsis.development_events.map((event: any, idx: number) => (
+                              <li key={idx}>{typeof event === 'string' ? event : event.description || JSON.stringify(event)}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {synopsis.ending_resolution && (
+                        <div className={styles.synopsisSection}>
+                          <div className={styles.synopsisLabel}>结尾收束</div>
+                          <div className={styles.synopsisText}>{synopsis.ending_resolution}</div>
+                        </div>
+                      )}
+                      {synopsis.ending_cliffhanger && (
+                        <div className={styles.synopsisSection}>
+                          <div className={styles.synopsisLabel}>章末悬念</div>
+                          <div className={styles.synopsisText}>{synopsis.ending_cliffhanger}</div>
+                        </div>
+                      )}
+                      {synopsis.content_md && (
+                        <div className={styles.synopsisSection}>
+                          <div className={styles.synopsisLabel}>完整细纲</div>
+                          <pre className={styles.synopsisMarkdown}>{synopsis.content_md}</pre>
+                        </div>
+                      )}
+                    </div>
+                  ),
+                },
+              ]}
+            />
+          </aside>
+        )}
         <section className={styles.editorShell}>
-          <div className={styles.editorTitle}>正文编辑器</div>
+          <WritingToolbar
+            title="正文"
+            wordCount={content.length}
+            searchValue={searchValue}
+            searchCount={searchCount}
+            onSearchChange={setSearchValue}
+            onUndo={() => document.execCommand('undo')}
+            onRedo={() => document.execCommand('redo')}
+            onOpenVersions={() => setCompareOpen(true)}
+            versionsDisabled={!currentChapter.content && !content}
+          />
           <TextArea
             value={content}
             onChange={event => setContent(event.target.value)}
@@ -197,6 +289,25 @@ export default function ChapterPage() {
           />
         </section>
       </div>
+
+      <Modal
+        title="正文版本对比"
+        open={compareOpen}
+        onCancel={() => setCompareOpen(false)}
+        footer={null}
+        width={980}
+      >
+        <div className={styles.compareGrid}>
+          <div>
+            <div className={styles.compareTitle}>已保存版本</div>
+            <pre className={styles.compareContent}>{currentChapter.content || '还没有保存过正文'}</pre>
+          </div>
+          <div>
+            <div className={styles.compareTitle}>当前编辑区</div>
+            <pre className={styles.compareContent}>{content || '当前没有内容'}</pre>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }

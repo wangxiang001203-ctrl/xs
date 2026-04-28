@@ -17,30 +17,34 @@ export interface WorkspaceTab {
   novelId?: string
   chapterId?: string
   volumeId?: string
+  worldbuildingSectionId?: string
+  worldbuildingSectionName?: string
   novelSnapshot?: Novel | null
   chapterSnapshot?: Chapter | null
   volumeSnapshot?: Volume | null
   closable?: boolean
 }
 
-export function getWorkspaceTabId(type: WorkspaceTabType, novelId?: string, chapterId?: string, volumeId?: string) {
+export function getWorkspaceTabId(type: WorkspaceTabType, novelId?: string, chapterId?: string, volumeId?: string, worldbuildingSectionId?: string) {
   if (type === 'admin') return 'admin'
   if (type === 'chapter') return `chapter:${chapterId || 'unknown'}`
   if (type === 'chapter_synopsis') return `chapter_synopsis:${chapterId || 'unknown'}`
   if (type === 'volume') return `volume:${volumeId || 'unknown'}`
+  if (type === 'worldbuilding') return `worldbuilding:${novelId || 'global'}:${worldbuildingSectionId || 'overview'}`
   return `${type}:${novelId || 'global'}`
 }
 
-export function buildWorkspaceTitle(type: WorkspaceTabType, novel?: Novel | null, chapter?: Chapter | null, volume?: Volume | null) {
+export function buildWorkspaceTitle(type: WorkspaceTabType, novel?: Novel | null, chapter?: Chapter | null, volume?: Volume | null, worldbuildingSectionName?: string | null) {
+  void novel
   switch (type) {
     case 'outline':
-      return novel ? `大纲 · ${novel.title}` : '大纲'
+      return '大纲'
     case 'novel_synopsis':
-      return novel ? `简介 · ${novel.title}` : '简介'
+      return '简介'
     case 'characters':
-      return novel ? `角色 · ${novel.title}` : '角色'
+      return '角色'
     case 'worldbuilding':
-      return novel ? `世界观 · ${novel.title}` : '世界观'
+      return worldbuildingSectionName || '世界观'
     case 'volume':
       if (!volume) return '分卷'
       return `分卷 · ${volume.title}`

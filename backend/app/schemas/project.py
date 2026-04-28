@@ -38,6 +38,7 @@ class OutlineCreate(BaseModel):
     main_plot: Optional[str] = None
     content: Optional[str] = None
     ai_generated: bool = True
+    version_note: Optional[str] = None
 
 
 class OutlineUpdate(BaseModel):
@@ -47,6 +48,7 @@ class OutlineUpdate(BaseModel):
     main_plot: Optional[str] = None
     content: Optional[str] = None
     confirmed: Optional[bool] = None
+    version_note: Optional[str] = None
 
 
 class OutlineOut(BaseModel):
@@ -60,6 +62,7 @@ class OutlineOut(BaseModel):
     ai_generated: bool
     confirmed: bool
     version: int
+    version_note: Optional[str]
     created_at: datetime
 
     model_config = {"from_attributes": True}

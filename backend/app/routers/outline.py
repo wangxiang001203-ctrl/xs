@@ -2,7 +2,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import Outline, Novel, Character, Worldbuilding, Volume, Chapter
+from app.models import Outline, Novel, Character, Worldbuilding, Volume, Chapter, OutlineChatMessage
 from app.schemas.project import OutlineCreate, OutlineUpdate, OutlineOut
 from app.services.file_service import (
     save_outline,
@@ -16,6 +16,7 @@ from app.services.file_service import (
 from app.services.worldbuilding_service import apply_worldbuilding_document, load_worldbuilding_document
 
 router = APIRouter(prefix="/api/projects/{novel_id}/outline", tags=["outline"])
+MAX_OUTLINE_ARCHIVES = 5
 
 
 def _safe_text(value, default: str = "") -> str:
@@ -276,6 +277,10 @@ def get_latest_outline(novel_id: str, db: Session = Depends(get_db)):
 @router.post("", response_model=OutlineOut)
 def create_outline(novel_id: str, data: OutlineCreate, db: Session = Depends(get_db)):
     # 版本号自增
+    existing_count = db.query(Outline).filter(Outline.novel_id == novel_id).count()
+    # 当前正在编辑的大纲不算历史存档，所以允许“当前草稿 + 5 个存档节点”。
+    if existing_count >= MAX_OUTLINE_ARCHIVES + 1:
+        raise HTTPException(400, "大纲最多保留 5 个存档节点。请先删除不需要的旧存档，再保存新存档。")
     last = db.query(Outline).filter(Outline.novel_id == novel_id).order_by(Outline.version.desc()).first()
     version = (last.version + 1) if last else 1
     outline = Outline(novel_id=novel_id, version=version, **data.model_dump())
@@ -285,6 +290,40 @@ def create_outline(novel_id: str, data: OutlineCreate, db: Session = Depends(get
     return outline
 
 
+@router.post("/reset")
+def reset_outline(novel_id: str, db: Session = Depends(get_db)):
+    novel = db.query(Novel).filter(Novel.id == novel_id).first()
+    if not novel:
+        raise HTTPException(404, "小说不存在")
+    confirmed = db.query(Outline).filter(
+        Outline.novel_id == novel_id,
+        Outline.confirmed == True,
+    ).first()
+    if confirmed:
+        raise HTTPException(400, "大纲已确认过，不能再清空重写。后续修改请通过大纲打磨和存档节点管理完成。")
+
+    db.query(OutlineChatMessage).filter(OutlineChatMessage.novel_id == novel_id).delete(synchronize_session=False)
+    db.query(Outline).filter(Outline.novel_id == novel_id).delete(synchronize_session=False)
+    novel.idea = None
+    db.commit()
+    return {"status": "ok"}
+
+
+@router.delete("/{outline_id}")
+def delete_outline(novel_id: str, outline_id: str, db: Session = Depends(get_db)):
+    outline = db.query(Outline).filter(
+        Outline.id == outline_id,
+        Outline.novel_id == novel_id,
+    ).first()
+    if not outline:
+        raise HTTPException(404, "大纲存档不存在")
+    if outline.confirmed:
+        raise HTTPException(400, "已确认的大纲存档不能删除")
+    db.delete(outline)
+    db.commit()
+    return {"status": "ok"}
+
+
 @router.patch("/{outline_id}", response_model=OutlineOut)
 def update_outline(novel_id: str, outline_id: str, data: OutlineUpdate, db: Session = Depends(get_db)):
     outline = db.query(Outline).filter(
@@ -292,11 +331,22 @@ def update_outline(novel_id: str, outline_id: str, data: OutlineUpdate, db: Sess
     ).first()
     if not outline:
         raise HTTPException(404, "大纲不存在")
-    for k, v in data.model_dump(exclude_none=True).items():
+    changes = data.model_dump(exclude_none=True)
+    should_confirm = changes.get("confirmed") is True and not outline.confirmed
+    if should_confirm:
+        existing_confirmed = db.query(Outline).filter(
+            Outline.novel_id == novel_id,
+            Outline.confirmed == True,
+            Outline.id != outline_id,
+        ).first()
+        if existing_confirmed:
+            raise HTTPException(400, "大纲已确认过，确认按钮只能使用一次。后续修改会保存为存档记录，不会重复确认。")
+
+    for k, v in changes.items():
         setattr(outline, k, v)
     db.commit()
     db.refresh(outline)
-    if data.confirmed:
+    if should_confirm:
         _sync_confirmed_outline(novel_id, outline, db)
         db.refresh(outline)
     elif outline.confirmed and outline.content:

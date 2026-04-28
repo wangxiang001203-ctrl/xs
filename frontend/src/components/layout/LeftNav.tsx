@@ -1,27 +1,40 @@
 import { useEffect, useState } from 'react'
-import { Button, Tooltip, Modal, Form, Input, Select, message, Popconfirm } from 'antd'
+import { Button, Tooltip, Modal, Form, Input, Select, message, Popconfirm, Radio, Space } from 'antd'
 import {
   BookOutlined, UserOutlined, GlobalOutlined,
   PlusOutlined, UnorderedListOutlined, FileTextOutlined,
   FolderOutlined, ThunderboltOutlined,
-  SettingOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons'
-import { useNavigate } from 'react-router-dom'
 import { api } from '../../api'
 import { useAppStore } from '../../store'
 import type { ModelProviderConfig, Chapter, Volume, WorkflowConfig } from '../../types'
 import styles from './LeftNav.module.css'
 
+const WORLD_SETTING_NAV = [
+  { id: 'overview', label: '世界总述', icon: <GlobalOutlined /> },
+  { id: 'power_system', label: '力量体系', icon: <ThunderboltOutlined /> },
+  { id: 'techniques', label: '功法 / 技能', icon: <FileTextOutlined /> },
+  { id: 'items', label: '道具 / 资源', icon: <BookOutlined /> },
+  { id: 'geography', label: '地点 / 地图', icon: <GlobalOutlined /> },
+  { id: 'factions', label: '势力 / 组织', icon: <FolderOutlined /> },
+  { id: 'core_rules', label: '世界规则', icon: <FileTextOutlined /> },
+]
+
+const BUILTIN_WORLD_SECTION_IDS = new Set(WORLD_SETTING_NAV.map(item => item.id))
+
 export default function LeftNav() {
-  const navigate = useNavigate()
   const {
     currentNovel,
+    setCurrentNovel,
     currentView,
     currentChapter, setCurrentChapter,
     setCurrentVolume,
-    setWorkspaceMode,
     setChapters,
     chapters, volumes, setVolumes,
+    worldbuilding,
+    activeWorldbuildingSectionId,
+    setActiveWorldbuildingSectionId,
     openTab,
   } = useAppStore()
 
@@ -29,11 +42,35 @@ export default function LeftNav() {
   const [generatingVolume, setGeneratingVolume] = useState<string | null>(null)
   const [workflowConfig, setWorkflowConfig] = useState<WorkflowConfig | null>(null)
   const [savingModelConfig, setSavingModelConfig] = useState(false)
+  const [titleModalOpen, setTitleModalOpen] = useState(false)
+  const [titlePrompt, setTitlePrompt] = useState('')
+  const [titleOptions, setTitleOptions] = useState<string[]>([])
+  const [selectedTitle, setSelectedTitle] = useState('')
+  const [generatingTitles, setGeneratingTitles] = useState(false)
+  const [applyingTitle, setApplyingTitle] = useState(false)
+  const [outlineConfirmed, setOutlineConfirmed] = useState(false)
   const [volumeForm] = Form.useForm()
 
   useEffect(() => {
     loadWorkflowConfig()
   }, [])
+
+  useEffect(() => {
+    void loadOutlineStatus()
+  }, [currentNovel?.id])
+
+  useEffect(() => {
+    function handleOutlineChanged() {
+      void loadOutlineStatus()
+    }
+
+    window.addEventListener('mobi:outline-generated', handleOutlineChanged)
+    window.addEventListener('mobi:outline-confirmed', handleOutlineChanged)
+    return () => {
+      window.removeEventListener('mobi:outline-generated', handleOutlineChanged)
+      window.removeEventListener('mobi:outline-confirmed', handleOutlineChanged)
+    }
+  }, [currentNovel?.id])
 
   async function loadWorkflowConfig() {
     try {
@@ -44,8 +81,25 @@ export default function LeftNav() {
     }
   }
 
+  async function loadOutlineStatus() {
+    if (!currentNovel) {
+      setOutlineConfirmed(false)
+      return
+    }
+    try {
+      const outlines = await api.outline.list(currentNovel.id)
+      setOutlineConfirmed(outlines.some(item => item.confirmed))
+    } catch {
+      setOutlineConfirmed(false)
+    }
+  }
+
   async function addChapter(volumeId?: string) {
     if (!currentNovel) return
+    if (!outlineConfirmed) {
+      message.warning('请先确认大纲')
+      return
+    }
     const nextNum = chapters.length + 1
     try {
       const ch = await api.chapters.create(currentNovel.id, {
@@ -82,6 +136,10 @@ export default function LeftNav() {
 
   async function createVolume(values: { title: string; description?: string }) {
     if (!currentNovel) return
+    if (!outlineConfirmed) {
+      message.warning('请先确认大纲')
+      return
+    }
     try {
       const vol = await api.volumes.create(currentNovel.id, {
         title: values.title,
@@ -100,6 +158,7 @@ export default function LeftNav() {
 
   async function deleteVolume(volumeId: string) {
     if (!currentNovel) return
+    if (!outlineConfirmed) return
     try {
       await api.volumes.delete(currentNovel.id, volumeId)
       setVolumes(volumes.filter(v => v.id !== volumeId))
@@ -110,6 +169,10 @@ export default function LeftNav() {
 
   async function generateVolumeSynopsis(volume: Volume) {
     if (!currentNovel) return
+    if (!outlineConfirmed) {
+      message.warning('请先确认大纲')
+      return
+    }
     setGeneratingVolume(volume.id)
     try {
       const result = await api.ai.generateVolumeSynopsis(currentNovel.id, volume.id)
@@ -175,6 +238,10 @@ export default function LeftNav() {
 
   async function openChapterContent(chapter: Chapter) {
     if (!currentNovel) return
+    if (!outlineConfirmed) {
+      message.warning('请先确认大纲')
+      return
+    }
     const chapterStarted = Boolean(chapter.word_count || chapter.final_approved || chapter.status !== 'draft')
     const activeVolume = chapter.volume_id ? volumes.find(volume => volume.id === chapter.volume_id) || null : null
     if (!activeVolume && !chapterStarted) {
@@ -209,20 +276,94 @@ export default function LeftNav() {
 
   const orderedChapters = [...chapters].sort((a, b) => a.chapter_number - b.chapter_number)
 
-  function backToBookshelf() {
-    setWorkspaceMode('bookshelf')
-    navigate('/bookshelf')
+  function openTitleModal() {
+    if (!outlineConfirmed) {
+      message.warning('请先确认大纲')
+      return
+    }
+    setTitlePrompt('')
+    setTitleOptions([])
+    setSelectedTitle('')
+    setTitleModalOpen(true)
   }
+
+  async function generateTitles() {
+    if (!currentNovel) return
+    setGeneratingTitles(true)
+    try {
+      const res = await api.ai.generateTitles(currentNovel.id, titlePrompt.trim() || undefined)
+      if (!res.titles?.length) {
+        message.warning('未生成可用书名，请调整提示后重试')
+        return
+      }
+      setTitleOptions(res.titles)
+      setSelectedTitle(res.titles[0])
+      message.success('已生成10个候选书名')
+    } catch (err: any) {
+      message.error(err?.response?.data?.detail || '生成书名失败，请先确认大纲')
+    } finally {
+      setGeneratingTitles(false)
+    }
+  }
+
+  async function applySelectedTitle() {
+    if (!currentNovel || !selectedTitle) return
+    setApplyingTitle(true)
+    try {
+      const updated = await api.novels.update(currentNovel.id, { title: selectedTitle })
+      setCurrentNovel(updated)
+      setTitleModalOpen(false)
+      setTitleOptions([])
+      setSelectedTitle('')
+      message.success('书名已替换')
+    } catch {
+      message.error('书名更新失败')
+    } finally {
+      setApplyingTitle(false)
+    }
+  }
+
+  function openWorldSetting(sectionId: string, sectionName: string) {
+    if (!currentNovel) return
+    setActiveWorldbuildingSectionId(sectionId)
+    openTab({
+      type: 'worldbuilding',
+      novelSnapshot: currentNovel,
+      worldbuildingSectionId: sectionId,
+      worldbuildingSectionName: sectionName,
+    })
+    setCurrentChapter(null)
+  }
+
+  function createCustomSetting() {
+    openWorldSetting('__new_custom__', '新建设定')
+  }
+
+  const customSections = (worldbuilding?.sections || []).filter(section =>
+    section.id && !BUILTIN_WORLD_SECTION_IDS.has(section.id),
+  )
 
   return (
     <div className={styles.nav}>
       {/* 顶部 */}
       <div className={styles.header}>
-        <button type="button" className={styles.shelfButton} onClick={backToBookshelf}>
-          <BookOutlined />
-          <span>书架</span>
-        </button>
-        <span className={styles.logo}>墨笔</span>
+        <div className={styles.bookIdentity}>
+          <span className={styles.bookLabel}>当前作品</span>
+          <span className={styles.bookTitle}>{currentNovel?.title || '未选择作品'}</span>
+        </div>
+        {currentNovel && (
+          <Tooltip title="重新生成书名">
+            <Button
+              size="small"
+              type="text"
+              icon={<ReloadOutlined />}
+              onClick={openTitleModal}
+              disabled={!outlineConfirmed}
+            >
+              换名
+            </Button>
+          </Tooltip>
+        )}
       </div>
 
       <div className={styles.modelConfigCard}>
@@ -256,23 +397,16 @@ export default function LeftNav() {
         <div className={styles.modelHint}>当前先走豆包，同一 API Key，后续可扩展更多提供商。</div>
       </div>
 
-      <div className={styles.adminEntry}>
-        <NavItem
-          icon={<SettingOutlined />}
-          label="后台流程配置"
-          active={currentView === 'admin'}
-          onClick={() => { openTab({ type: 'admin', closable: false }); setCurrentChapter(null) }}
-        />
-      </div>
-
       {/* 当前小说导航 */}
       {currentNovel && (
         <div className={styles.section}>
-          <div className={styles.sectionTitle}>{currentNovel.title}</div>
+          <div className={styles.sectionTitle}>作品结构</div>
 
           <NavItem
             icon={<UnorderedListOutlined />}
             label="大纲"
+            tag={outlineConfirmed ? undefined : '待确认'}
+            tagTone="warning"
             active={currentView === 'outline'}
             onClick={() => { openTab({ type: 'outline', novelSnapshot: currentNovel }); setCurrentChapter(null) }}
           />
@@ -280,20 +414,48 @@ export default function LeftNav() {
             icon={<FileTextOutlined />}
             label="简介"
             active={currentView === 'novel_synopsis'}
+            disabled={!outlineConfirmed}
             onClick={() => { openTab({ type: 'novel_synopsis', novelSnapshot: currentNovel }); setCurrentChapter(null) }}
           />
+
+          <div className={styles.sectionTitle}>通用设定</div>
           <NavItem
             icon={<UserOutlined />}
             label="角色"
             active={currentView === 'characters'}
+            disabled={!outlineConfirmed}
             onClick={() => { openTab({ type: 'characters', novelSnapshot: currentNovel }); setCurrentChapter(null) }}
           />
-          <NavItem
-            icon={<GlobalOutlined />}
-            label="世界观设定"
-            active={currentView === 'worldbuilding'}
-            onClick={() => { openTab({ type: 'worldbuilding', novelSnapshot: currentNovel }); setCurrentChapter(null) }}
-          />
+          {WORLD_SETTING_NAV.map(item => (
+            <NavItem
+              key={item.id}
+              icon={item.icon}
+              label={item.label}
+              active={currentView === 'worldbuilding' && activeWorldbuildingSectionId === item.id}
+              disabled={!outlineConfirmed}
+              onClick={() => openWorldSetting(item.id, item.label)}
+            />
+          ))}
+
+          <div className={styles.chapterHeader}>
+            <span>自定义设定</span>
+            <Tooltip title="新建设定文件">
+              <Button type="text" size="small" icon={<PlusOutlined />} disabled={!outlineConfirmed} onClick={createCustomSetting} />
+            </Tooltip>
+          </div>
+          {customSections.length === 0 ? (
+            <div className={styles.emptyTreeHint}>{outlineConfirmed ? '暂无自定义设定。可以新增灵兽、秘境规则、职业体系等。' : '确认大纲后解锁自定义设定。'}</div>
+          ) : null}
+          {customSections.map(section => (
+            <NavItem
+              key={section.id}
+              icon={<FileTextOutlined />}
+              label={section.name || '未命名设定'}
+              active={currentView === 'worldbuilding' && activeWorldbuildingSectionId === section.id}
+              disabled={!outlineConfirmed}
+              onClick={() => openWorldSetting(section.id || 'overview', section.name || '自定义设定')}
+            />
+          ))}
 
           {/* 分卷文档树 */}
           <div className={styles.chapterSection}>
@@ -301,13 +463,13 @@ export default function LeftNav() {
               <span>分卷</span>
               <div style={{ display: 'flex', gap: 2 }}>
                 <Tooltip title="新建卷">
-                  <Button type="text" size="small" icon={<FolderOutlined />} onClick={() => setVolumeOpen(true)} />
+                  <Button type="text" size="small" icon={<FolderOutlined />} disabled={!outlineConfirmed} onClick={() => setVolumeOpen(true)} />
                 </Tooltip>
               </div>
             </div>
 
             {volumes.length === 0 ? (
-              <div className={styles.emptyTreeHint}>暂无分卷。确认大纲后会自动创建分卷，也可以点上方文件夹手动新建。</div>
+              <div className={styles.emptyTreeHint}>{outlineConfirmed ? '暂无分卷。可以点上方文件夹手动新建。' : '确认大纲后解锁分卷。'}</div>
             ) : null}
 
             {/* 各卷 */}
@@ -325,20 +487,24 @@ export default function LeftNav() {
                     >
                       {vol.title}
                     </span>
+                    <span className={`${styles.itemTag} ${vol.review_status === 'approved' ? styles.tagSuccess : styles.tagWarning}`}>
+                      {vol.review_status === 'approved' ? '已批' : '待批'}
+                    </span>
                     <div className={styles.volumeActions}>
                       <Tooltip title="生成本卷细纲">
                         <Button
                           type="text" size="small"
                           icon={<ThunderboltOutlined />}
                           loading={generatingVolume === vol.id}
+                          disabled={!outlineConfirmed}
                           onClick={() => generateVolumeSynopsis(vol)}
                         />
                       </Tooltip>
                       <Tooltip title="新建章节">
-                        <Button type="text" size="small" icon={<PlusOutlined />} onClick={() => addChapter(vol.id)} />
+                        <Button type="text" size="small" icon={<PlusOutlined />} disabled={!outlineConfirmed} onClick={() => addChapter(vol.id)} />
                       </Tooltip>
                       <Popconfirm title="删除此卷？已开始写作的卷会被后端拦截" onConfirm={() => deleteVolume(vol.id)} okText="删除" cancelText="取消">
-                        <Button type="text" size="small" danger style={{ fontSize: 10 }}>×</Button>
+                        <Button type="text" size="small" danger disabled={!outlineConfirmed} style={{ fontSize: 10 }}>×</Button>
                       </Popconfirm>
                     </div>
                   </div>
@@ -349,7 +515,7 @@ export default function LeftNav() {
             <div className={styles.chapterHeader}>
               <span>正文</span>
               <Tooltip title="新建章节正文">
-                <Button type="text" size="small" icon={<PlusOutlined />} onClick={() => addChapter()} />
+                <Button type="text" size="small" icon={<PlusOutlined />} disabled={!outlineConfirmed} onClick={() => addChapter()} />
               </Tooltip>
             </div>
             {orderedChapters.map(ch => (
@@ -357,6 +523,7 @@ export default function LeftNav() {
                 key={ch.id}
                 ch={ch}
                 active={currentView === 'chapter' && currentChapter?.id === ch.id}
+                disabled={!outlineConfirmed}
                 onOpenContent={() => openChapterContent(ch)}
               />
             ))}
@@ -382,23 +549,69 @@ export default function LeftNav() {
           </Form.Item>
         </Form>
       </Modal>
+
+      <Modal
+        title="重新生成书名"
+        open={titleModalOpen}
+        onCancel={() => setTitleModalOpen(false)}
+        footer={null}
+        destroyOnClose
+      >
+        <div className={styles.titleModalBody}>
+          <Input.TextArea
+            value={titlePrompt}
+            onChange={event => setTitlePrompt(event.target.value)}
+            placeholder="可选：输入书名偏好，例如“更短、更燃、带修仙感，避免生僻字”"
+            autoSize={{ minRows: 3, maxRows: 5 }}
+          />
+          <Space>
+            <Button type="primary" loading={generatingTitles} onClick={generateTitles}>
+              生成10个书名
+            </Button>
+            <Button
+              disabled={!selectedTitle}
+              loading={applyingTitle}
+              onClick={applySelectedTitle}
+            >
+              选中并替换
+            </Button>
+          </Space>
+          {!!titleOptions.length && (
+            <Radio.Group
+              value={selectedTitle}
+              onChange={event => setSelectedTitle(event.target.value)}
+              className={styles.titleOptions}
+            >
+              <Space direction="vertical">
+                {titleOptions.map(title => (
+                  <Radio key={title} value={title}>{title}</Radio>
+                ))}
+              </Space>
+            </Radio.Group>
+          )}
+        </div>
+      </Modal>
     </div>
   )
 }
 
-function NavItem({ icon, label, active, onClick }: {
+function NavItem({ icon, label, tag, tagTone = 'default', active, disabled, onClick }: {
   icon: React.ReactNode
   label: string
+  tag?: string
+  tagTone?: 'success' | 'warning' | 'default'
   active: boolean
+  disabled?: boolean
   onClick: () => void
 }) {
   return (
     <div
-      className={`${styles.navItem} ${active ? styles.active : ''}`}
-      onClick={onClick}
+      className={`${styles.navItem} ${active ? styles.active : ''} ${disabled ? styles.disabled : ''}`}
+      onClick={disabled ? undefined : onClick}
     >
       <span className={styles.navIcon}>{icon}</span>
-      <span>{label}</span>
+      <span className={styles.navText}>{label}</span>
+      {tag ? <span className={`${styles.itemTag} ${tagTone === 'success' ? styles.tagSuccess : tagTone === 'warning' ? styles.tagWarning : ''}`}>{tag}</span> : null}
     </div>
   )
 }
@@ -406,10 +619,12 @@ function NavItem({ icon, label, active, onClick }: {
 function ChapterContentItem({
   ch,
   active,
+  disabled,
   onOpenContent,
 }: {
   ch: Chapter
   active: boolean
+  disabled?: boolean
   onOpenContent: () => void
 }) {
   return (
@@ -417,9 +632,13 @@ function ChapterContentItem({
       type="button"
       className={`${styles.chapterDocItem} ${active ? styles.activeDoc : ''}`}
       onClick={onOpenContent}
+      disabled={disabled}
     >
       <BookOutlined className={styles.chapterIcon} />
       <span className={styles.chapterTitle}>{ch.title || `第${ch.chapter_number}章`}</span>
+      <span className={`${styles.itemTag} ${ch.final_approved ? styles.tagSuccess : ch.status === 'writing' ? styles.tagWarning : ''}`}>
+        {ch.final_approved ? '已定' : ch.status === 'writing' ? '写作中' : '待写'}
+      </span>
       <span className={`${styles.chapterStatus} ${styles[`status_${ch.status}`]}`} />
     </button>
   )

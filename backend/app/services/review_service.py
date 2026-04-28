@@ -8,6 +8,7 @@ from app.services import ai_service
 from app.services.file_service import save_chapter_memory, save_characters, save_entity_proposals, save_worldbuilding
 from app.services.validator import validate_story_entities
 from app.services.worldbuilding_service import apply_worldbuilding_document, load_worldbuilding_document
+from app.services.entity_service import bootstrap_entities_from_existing, get_or_create_entity, scan_chapter_mentions
 
 
 PROPOSAL_SECTION_MAP = {
@@ -26,6 +27,83 @@ def _safe_text(value, default: str = "") -> str:
         return default
     text = str(value).strip()
     return text or default
+
+
+def _apply_character_updates(db: Session, novel_id: str, chapter_number: int, character_updates: list[dict]):
+    """根据章节记忆自动更新角色状态"""
+    for update in character_updates:
+        name = _safe_text(update.get("name"))
+        if not name:
+            continue
+
+        character = db.query(Character).filter(
+            Character.novel_id == novel_id,
+            Character.name == name,
+        ).first()
+
+        if not character:
+            continue
+
+        # 更新境界
+        if update.get("realm"):
+            character.realm = _safe_text(update.get("realm"))
+        if update.get("realm_level"):
+            character.realm_level = _safe_text(update.get("realm_level"))
+
+        # 更新技能（追加不重复）
+        new_techniques = update.get("techniques") or []
+        if new_techniques:
+            existing_techniques = character.techniques or []
+            character.techniques = list(set(existing_techniques + new_techniques))
+
+        # 更新法宝（追加不重复）
+        new_artifacts = update.get("artifacts") or []
+        if new_artifacts:
+            existing_artifacts = character.artifacts or []
+            character.artifacts = list(set(existing_artifacts + new_artifacts))
+
+        # 更新状态
+        if update.get("status"):
+            character.status = _safe_text(update.get("status"))
+
+        # 更新关系（追加）
+        relationships_changed = update.get("relationships_changed") or []
+        if relationships_changed:
+            existing_relationships = character.relationships or []
+            character.relationships = existing_relationships + [
+                {"chapter": chapter_number, "change": rel} for rel in relationships_changed
+            ]
+
+    db.flush()
+    # 保存更新后的角色列表
+    all_characters = db.query(Character).filter(Character.novel_id == novel_id).all()
+    save_characters(
+        novel_id,
+        [
+            {
+                "id": item.id,
+                "name": item.name,
+                "role": item.role,
+                "gender": item.gender,
+                "age": item.age,
+                "race": item.race,
+                "realm": item.realm,
+                "realm_level": item.realm_level,
+                "faction": item.faction,
+                "techniques": item.techniques or [],
+                "artifacts": item.artifacts or [],
+                "appearance": item.appearance,
+                "personality": item.personality,
+                "background": item.background,
+                "golden_finger": item.golden_finger,
+                "motivation": item.motivation,
+                "relationships": item.relationships or [],
+                "status": item.status,
+                "first_appearance_chapter": item.first_appearance_chapter,
+            }
+            for item in all_characters
+        ],
+    )
 
 
 def serialize_proposal(proposal: EntityProposal) -> dict:
@@ -193,6 +271,16 @@ def apply_proposal(db: Session, proposal: EntityProposal):
             if not character.background:
                 character.background = _safe_text(entry.get("details"))
         db.flush()
+        get_or_create_entity(
+            db,
+            novel_id=proposal.novel_id,
+            entity_type="character",
+            name=proposal.entity_name,
+            aliases=entry.get("aliases") or [],
+            summary=_safe_text(entry.get("summary") or entry.get("role")),
+            body_md=_safe_text(entry.get("details")),
+            first_appearance_chapter=character.first_appearance_chapter,
+        )
         all_characters = db.query(Character).filter(Character.novel_id == proposal.novel_id).all()
         save_characters(
             proposal.novel_id,
@@ -231,6 +319,24 @@ def apply_proposal(db: Session, proposal: EntityProposal):
     document = load_worldbuilding_document(proposal.novel_id, wb)
     _append_worldbuilding_entry(document, proposal)
     apply_worldbuilding_document(wb, document)
+    payload = proposal.payload or {}
+    entry = payload.get("entry") or {}
+    normalized_type = proposal.entity_type
+    if normalized_type in {"artifact", "treasure"}:
+        normalized_type = "item"
+    elif normalized_type == "location":
+        normalized_type = "location"
+    elif normalized_type == "realm":
+        normalized_type = "realm"
+    get_or_create_entity(
+        db,
+        novel_id=proposal.novel_id,
+        entity_type=normalized_type,
+        name=proposal.entity_name,
+        aliases=entry.get("aliases") or [],
+        summary=_safe_text(entry.get("summary")),
+        body_md=_safe_text(entry.get("details")),
+    )
     save_worldbuilding(proposal.novel_id, load_worldbuilding_document(proposal.novel_id, wb))
 
 
@@ -263,18 +369,43 @@ async def build_chapter_memory(db: Session, chapter: Chapter, synopsis: Synopsis
 输出 JSON：
 ```json
 {{
-  "summary": "80-180字总结",
-  "key_events": ["事件1", "事件2"],
-  "state_changes": ["谁发生了什么变化"],
-  "inventory_changes": ["获得/失去的道具或资源"],
-  "open_threads": ["留下的悬念或未完成事项"]
+  "summary": "80-180字总结本章核心剧情",
+  "key_events": ["事件1：具体发生了什么", "事件2：..."],
+  "state_changes": [
+    "角色A：境界从XX突破到XX",
+    "角色B：获得了XX身份/地位",
+    "角色C：与角色D的关系变为XX"
+  ],
+  "inventory_changes": [
+    "获得：XX道具/功法/资源（来源：XX）",
+    "失去：XX道具/资源（原因：XX）",
+    "消耗：XX资源用于XX"
+  ],
+  "open_threads": [
+    "悬念1：XX事件尚未解决",
+    "伏笔1：XX提到的XX还未揭晓"
+  ],
+  "character_updates": [
+    {{
+      "name": "角色名",
+      "realm": "当前境界",
+      "realm_level": "境界层级",
+      "techniques": ["新获得的功法/技能"],
+      "artifacts": ["新获得的法宝/道具"],
+      "status": "当前状态（如：受伤/闭关/追杀中）",
+      "relationships_changed": ["与XX的关系变为XX"]
+    }}
+  ]
 }}
 ```
 
 要求：
-1. 只能写正文里已经发生的事实，不能脑补。
-2. 如果正文没有明确写到突破、获得道具、关系变化，就不要编造。
-3. 只输出 JSON。"""
+1. 只能写正文里已经真实发生的事实，不能脑补
+2. 如果正文没有明确写到突破、获得道具、关系变化，就不要编造
+3. state_changes要具体，包含变化前后的状态
+4. inventory_changes要注明来源和用途
+5. character_updates用于后续自动更新角色库
+6. 只输出 JSON"""
         if synopsis and synopsis.content_md:
             prompt += f"\n\n【本章细纲】\n{synopsis.content_md[:1800]}"
         prompt += f"\n\n【本章正文】\n{content[:6000]}"
@@ -294,6 +425,12 @@ async def build_chapter_memory(db: Session, chapter: Chapter, synopsis: Synopsis
     existing.open_threads = (memory_payload or {}).get("open_threads") or fallback_threads
     existing.source_excerpt = source_excerpt
     db.flush()
+
+    # 自动更新角色状态
+    character_updates = (memory_payload or {}).get("character_updates") or []
+    if character_updates:
+        _apply_character_updates(db, chapter.novel_id, chapter.chapter_number, character_updates)
+
     save_chapter_memory(
         chapter.novel_id,
         chapter.chapter_number,

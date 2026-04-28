@@ -202,6 +202,12 @@ export interface Volume {
   chapter_count?: number
 }
 
+export interface BookVolumePlan {
+  book_plan_markdown: string
+  approved: boolean
+  volumes: Volume[]
+}
+
 export interface Chapter {
   id: string
   novel_id: string

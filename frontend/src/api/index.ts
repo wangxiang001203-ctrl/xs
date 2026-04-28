@@ -2,6 +2,7 @@ import axios from 'axios'
 import type {
   AIGenerationJob,
   AssistantChatResult,
+  BookVolumePlan,
   Chapter,
   ChapterDraftResult,
   ChapterMemory,
@@ -230,6 +231,14 @@ export const api = {
         extra_instruction: extraInstruction,
         dry_run: options?.dryRun || false,
       }),
+    generateBookVolumes: (novelId: string, extraInstruction?: string) =>
+      runAiJob<{ status: string; volume_count: number; approved: boolean; book_plan_markdown: string; volumes: Volume[] }>(
+        '/api/ai/generate/book-volumes',
+        {
+          novel_id: novelId,
+          extra_instruction: extraInstruction,
+        },
+      ),
     generateVolumeSynopsis: (novelId: string, volumeId: string, extraInstruction?: string) =>
       runAiJob<{ status: string; chapter_count?: number; pending_proposals?: EntityProposal[] }>('/api/ai/generate/volume-synopsis', {
         novel_id: novelId,
@@ -282,6 +291,9 @@ export const api = {
 
   volumes: {
     list: (novelId: string) => http.get<Volume[]>(`/api/projects/${novelId}/volumes/`).then(r => r.data),
+    bookPlan: (novelId: string) => http.get<BookVolumePlan>(`/api/projects/${novelId}/volumes/book-plan`).then(r => r.data),
+    approveBookPlan: (novelId: string) =>
+      http.post<BookVolumePlan>(`/api/projects/${novelId}/volumes/book-plan/approve`).then(r => r.data),
     create: (novelId: string, data: { title: string; volume_number: number; description?: string }) =>
       http.post<Volume>(`/api/projects/${novelId}/volumes/`, data).then(r => r.data),
     update: (novelId: string, volumeId: string, data: Partial<Volume>) =>

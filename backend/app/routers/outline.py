@@ -239,7 +239,8 @@ def _sync_confirmed_outline(novel_id: str, outline: Outline, db: Session):
     if outline.synopsis:
         novel.synopsis = outline.synopsis
 
-    _sync_volumes_from_outline(novel_id, outline_struct, db)
+    # 大纲只作为全书基石。分卷规划改由“全书分卷”流程在大纲确认后单独生成和审批，
+    # 避免确认大纲时偷偷创建卷，导致正文流程入口混在一起。
     _sync_characters_from_outline(novel_id, outline_struct, db)
     _sync_worldbuilding_from_outline(novel_id, outline_struct, db)
     db.commit()

@@ -1,0 +1,210 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.48);
+  backdrop-filter: blur(12px);
+}
+
+.title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.content {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+  padding: 18px;
+}
+
+.entityPane,
+.graphPane {
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--bg-paper);
+  box-shadow: var(--shadow);
+}
+
+.entityPane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+}
+
+.entityList {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.entityItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.entityItem:hover,
+.entityItem.active {
+  border-color: var(--accent);
+  background: rgba(244, 250, 248, 0.94);
+}
+
+.entityItem strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.entityItem span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.graphPane {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  overflow: hidden;
+}
+
+.centerCard {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid rgba(47, 125, 134, 0.16);
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(244, 250, 248, 0.94), rgba(255, 255, 255, 0.88));
+}
+
+.nodeIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: rgba(47, 125, 134, 0.12);
+  color: var(--primary);
+  font-size: 20px;
+}
+
+.centerCard h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+  color: var(--text-primary);
+}
+
+.centerCard p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.relationRows {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.relationRow {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(100px, 160px) minmax(120px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.relationRow span,
+.relationRow strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.relationRow strong {
+  text-align: center;
+  color: var(--primary);
+}
+
+.relationRow p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.emptyRelations,
+.emptyList,
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.emptyRelations {
+  flex: 1;
+  min-height: 260px;
+  border: 1px dashed rgba(47, 125, 134, 0.22);
+  border-radius: 12px;
+}
+
+.emptyList {
+  min-height: 140px;
+  border: 1px dashed rgba(47, 125, 134, 0.22);
+  border-radius: 12px;
+}
+
+.empty {
+  height: 100%;
+}

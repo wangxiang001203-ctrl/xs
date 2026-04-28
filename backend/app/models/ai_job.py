@@ -30,6 +30,7 @@ class AIGenerationJob(Base):
             "outline",
             "titles",
             "book_synopsis",
+            "book_volumes",
             "characters",
             "worldbuilding",
             "chapter_synopsis",

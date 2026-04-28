@@ -11,7 +11,21 @@
       "Bash(curl -s -X GET https://ark.cn-beijing.volces.com/api/v3/models -H 'Authorization: Bearer ark-3936be89-a551-4b55-8b74-f0e21375bbf2-bdeae')",
       "Bash(python3 -c ' *)",
       "Bash(curl -s http://localhost:8000/health)",
-      "Bash(curl -s http://localhost:8000/openapi.json)"
+      "Bash(curl -s http://localhost:8000/openapi.json)",
+      "Bash(./backend/venv/bin/python --version)",
+      "Bash(./backend/venv/bin/python -c \"import pymysql; print\\('pymysql ok'\\)\")",
+      "Bash(mysql --version)",
+      "Bash(mysql -uroot -e \"SHOW DATABASES LIKE 'novel_ai';\")",
+      "Bash(../backend/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload)",
+      "Bash(curl -s http://localhost:8000/docs)",
+      "Bash(npm run *)",
+      "Bash(curl -s http://localhost:8000/api/projects)",
+      "Bash(awk '{print $2}')",
+      "Bash(xargs kill *)",
+      "Bash(./backend/venv/bin/python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 --app-dir backend)",
+      "Bash(curl -s http://localhost:8000/api/novels)",
+      "Bash(lsof -ti:8000)",
+      "Bash(grep -E \"\\\\.py$\")"
     ]
   }
 }

@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
-import { Button, Tooltip, Modal, Form, Input, Select, message, Popconfirm, Radio, Space } from 'antd'
+import { useEffect, useMemo, useState } from 'react'
+import { Button, Tooltip, Modal, Input, Select, message, Radio, Space } from 'antd'
 import {
   BookOutlined, UserOutlined, GlobalOutlined,
   PlusOutlined, UnorderedListOutlined, FileTextOutlined,
   FolderOutlined, ThunderboltOutlined,
   ReloadOutlined,
+  ApartmentOutlined,
 } from '@ant-design/icons'
 import { api } from '../../api'
 import { useAppStore } from '../../store'
@@ -29,17 +30,15 @@ export default function LeftNav() {
     setCurrentNovel,
     currentView,
     currentChapter, setCurrentChapter,
+    currentVolume,
     setCurrentVolume,
-    setChapters,
-    chapters, volumes, setVolumes,
+    chapters, volumes,
     worldbuilding,
     activeWorldbuildingSectionId,
     setActiveWorldbuildingSectionId,
     openTab,
   } = useAppStore()
 
-  const [volumeOpen, setVolumeOpen] = useState(false)
-  const [generatingVolume, setGeneratingVolume] = useState<string | null>(null)
   const [workflowConfig, setWorkflowConfig] = useState<WorkflowConfig | null>(null)
   const [savingModelConfig, setSavingModelConfig] = useState(false)
   const [titleModalOpen, setTitleModalOpen] = useState(false)
@@ -49,7 +48,6 @@ export default function LeftNav() {
   const [generatingTitles, setGeneratingTitles] = useState(false)
   const [applyingTitle, setApplyingTitle] = useState(false)
   const [outlineConfirmed, setOutlineConfirmed] = useState(false)
-  const [volumeForm] = Form.useForm()
 
   useEffect(() => {
     loadWorkflowConfig()
@@ -94,104 +92,12 @@ export default function LeftNav() {
     }
   }
 
-  async function addChapter(volumeId?: string) {
-    if (!currentNovel) return
-    if (!outlineConfirmed) {
-      message.warning('请先确认大纲')
-      return
-    }
-    const nextNum = chapters.length + 1
-    try {
-      const ch = await api.chapters.create(currentNovel.id, {
-        chapter_number: nextNum,
-        title: `第${nextNum}章`,
-      })
-      if (volumeId) {
-        await api.volumes.assignChapter(currentNovel.id, volumeId, ch.id)
-        const updated = { ...ch, volume_id: volumeId }
-        setChapters([...chapters, updated])
-        const volume = volumes.find(item => item.id === volumeId)
-        if (volume) {
-          setCurrentVolume(volume)
-          openTab({ type: 'volume', novelSnapshot: currentNovel, volumeSnapshot: volume })
-        }
-        message.success('章节已加入分卷，请先生成或更新本卷细纲')
-      } else {
-        setChapters([...chapters, ch])
-        setCurrentChapter(ch)
-        openTab({ type: 'chapter', novelSnapshot: currentNovel, chapterSnapshot: ch })
-      }
-    } catch {
-      message.error('创建章节失败')
-    }
-  }
-
   function canOpenChapterContent(chapter: Chapter) {
     if (chapter.chapter_number <= 1) return true
     const previous = [...chapters]
       .filter(item => item.chapter_number < chapter.chapter_number)
       .sort((a, b) => b.chapter_number - a.chapter_number)[0]
     return previous ? previous.final_approved : true
-  }
-
-  async function createVolume(values: { title: string; description?: string }) {
-    if (!currentNovel) return
-    if (!outlineConfirmed) {
-      message.warning('请先确认大纲')
-      return
-    }
-    try {
-      const vol = await api.volumes.create(currentNovel.id, {
-        title: values.title,
-        volume_number: volumes.length + 1,
-        description: values.description,
-      })
-      setVolumes([...volumes, vol])
-      setCurrentVolume(vol)
-      openTab({ type: 'volume', novelSnapshot: currentNovel, volumeSnapshot: vol })
-      setVolumeOpen(false)
-      volumeForm.resetFields()
-    } catch {
-      message.error('创建卷失败')
-    }
-  }
-
-  async function deleteVolume(volumeId: string) {
-    if (!currentNovel) return
-    if (!outlineConfirmed) return
-    try {
-      await api.volumes.delete(currentNovel.id, volumeId)
-      setVolumes(volumes.filter(v => v.id !== volumeId))
-    } catch (err: any) {
-      message.error(err?.response?.data?.detail || '删除失败')
-    }
-  }
-
-  async function generateVolumeSynopsis(volume: Volume) {
-    if (!currentNovel) return
-    if (!outlineConfirmed) {
-      message.warning('请先确认大纲')
-      return
-    }
-    setGeneratingVolume(volume.id)
-    try {
-      const result = await api.ai.generateVolumeSynopsis(currentNovel.id, volume.id)
-      const [vols, chs] = await Promise.all([
-        api.volumes.list(currentNovel.id),
-        api.chapters.list(currentNovel.id),
-      ])
-      setVolumes(vols)
-      setChapters(chs)
-      if (result.pending_proposals && result.pending_proposals.length > 0) {
-        message.warning(`《${volume.title}》细纲生成完成，但有 ${result.pending_proposals.length} 条新实体提案待审阅`)
-      } else {
-        message.success(`《${volume.title}》细纲生成完成，已同步 ${result.chapter_count || chs.filter(ch => ch.volume_id === volume.id).length} 章`)
-      }
-    } catch (err: any) {
-      message.error(`生成失败：${err?.response?.data?.detail || err.message}`)
-    } finally {
-      setGeneratingVolume(null)
-    }
   }
 
   async function saveModelConfig(nextProviderId: string, nextModelId: string) {
@@ -274,7 +180,50 @@ export default function LeftNav() {
     openTab({ type: 'chapter', novelSnapshot: currentNovel, chapterSnapshot: nextChapter })
   }
 
-  const orderedChapters = [...chapters].sort((a, b) => a.chapter_number - b.chapter_number)
+  function isBookPlanApproved(volume: Volume) {
+    return volume.plan_data?.book_plan_status === 'approved'
+  }
+
+  function openBookVolumes() {
+    if (!currentNovel) return
+    openTab({ type: 'book_volumes', novelSnapshot: currentNovel })
+    setCurrentChapter(null)
+  }
+
+  function openRelationshipNetwork() {
+    if (!currentNovel) return
+    openTab({ type: 'relationship_network', novelSnapshot: currentNovel })
+    setCurrentChapter(null)
+  }
+
+  function openVolumeDetail(volume: Volume) {
+    if (!currentNovel) return
+    if (!outlineConfirmed) {
+      message.warning('请先确认大纲')
+      return
+    }
+    if (!isBookPlanApproved(volume)) {
+      message.warning('请先到“全书分卷”审批整本书的卷级规划')
+      return
+    }
+    setCurrentVolume(volume)
+    openTab({ type: 'volume', novelSnapshot: currentNovel, volumeSnapshot: volume })
+    setCurrentChapter(null)
+  }
+
+  const orderedChapters = useMemo(() => [...chapters].sort((a, b) => a.chapter_number - b.chapter_number), [chapters])
+  const orderedVolumes = useMemo(() => [...volumes].sort((a, b) => a.volume_number - b.volume_number), [volumes])
+  const bookPlanApproved = orderedVolumes.length > 0 && orderedVolumes.every(isBookPlanApproved)
+  const chaptersByVolume = useMemo(() => {
+    const map = new Map<string, Chapter[]>()
+    for (const chapter of orderedChapters) {
+      if (!chapter.volume_id) continue
+      const list = map.get(chapter.volume_id) || []
+      list.push(chapter)
+      map.set(chapter.volume_id, list)
+    }
+    return map
+  }, [orderedChapters])
 
   function openTitleModal() {
     if (!outlineConfirmed) {
@@ -417,6 +366,15 @@ export default function LeftNav() {
             disabled={!outlineConfirmed}
             onClick={() => { openTab({ type: 'novel_synopsis', novelSnapshot: currentNovel }); setCurrentChapter(null) }}
           />
+          <NavItem
+            icon={<FolderOutlined />}
+            label="全书分卷"
+            tag={bookPlanApproved ? undefined : '待审批'}
+            tagTone="warning"
+            active={currentView === 'book_volumes'}
+            disabled={!outlineConfirmed}
+            onClick={openBookVolumes}
+          />
 
           <div className={styles.sectionTitle}>通用设定</div>
           <NavItem
@@ -425,6 +383,13 @@ export default function LeftNav() {
             active={currentView === 'characters'}
             disabled={!outlineConfirmed}
             onClick={() => { openTab({ type: 'characters', novelSnapshot: currentNovel }); setCurrentChapter(null) }}
+          />
+          <NavItem
+            icon={<ApartmentOutlined />}
+            label="关系网"
+            active={currentView === 'relationship_network'}
+            disabled={!outlineConfirmed}
+            onClick={openRelationshipNetwork}
           />
           {WORLD_SETTING_NAV.map(item => (
             <NavItem
@@ -457,98 +422,48 @@ export default function LeftNav() {
             />
           ))}
 
-          {/* 分卷文档树 */}
+          {/* 正文卷树 */}
           <div className={styles.chapterSection}>
             <div className={styles.chapterHeader}>
-              <span>分卷</span>
-              <div style={{ display: 'flex', gap: 2 }}>
-                <Tooltip title="新建卷">
-                  <Button type="text" size="small" icon={<FolderOutlined />} disabled={!outlineConfirmed} onClick={() => setVolumeOpen(true)} />
-                </Tooltip>
-              </div>
+              <span>正文</span>
             </div>
 
-            {volumes.length === 0 ? (
-              <div className={styles.emptyTreeHint}>{outlineConfirmed ? '暂无分卷。可以点上方文件夹手动新建。' : '确认大纲后解锁分卷。'}</div>
+            {orderedVolumes.length === 0 ? (
+              <div className={styles.emptyTreeHint}>{outlineConfirmed ? '先到“全书分卷”由 AI 生成卷级规划。正文不能直接新建章节。' : '确认大纲后解锁正文流程。'}</div>
             ) : null}
 
-            {/* 各卷 */}
-            {volumes.map(vol => {
+            {orderedVolumes.map(vol => {
+              const volumeChapters = chaptersByVolume.get(vol.id) || []
+              const volumeApproved = vol.review_status === 'approved'
+              const volumeBookApproved = isBookPlanApproved(vol)
+              const statusText = !volumeBookApproved ? '全书待批' : volumeApproved ? '可写' : vol.synopsis_generated ? '细纲待批' : '待细纲'
               return (
                 <div key={vol.id} className={styles.volumeGroup}>
-                  <div className={styles.volumeHeader}>
+                  <div className={`${styles.volumeHeader} ${currentView === 'volume' && currentVolume?.id === vol.id ? styles.activeVolumeHeader : ''}`} onClick={() => openVolumeDetail(vol)}>
                     <FolderOutlined className={styles.volumeToggle} />
-                    <span
-                      className={styles.volumeTitle}
-                      onClick={() => {
-                        setCurrentVolume(vol)
-                        openTab({ type: 'volume', novelSnapshot: currentNovel, volumeSnapshot: vol })
-                      }}
-                    >
-                      {vol.title}
+                    <span className={styles.volumeTitle}>第{vol.volume_number}卷 {vol.title}</span>
+                    <span className={`${styles.itemTag} ${volumeBookApproved && volumeApproved ? styles.tagSuccess : styles.tagWarning}`}>
+                      {statusText}
                     </span>
-                    <span className={`${styles.itemTag} ${vol.review_status === 'approved' ? styles.tagSuccess : styles.tagWarning}`}>
-                      {vol.review_status === 'approved' ? '已批' : '待批'}
-                    </span>
-                    <div className={styles.volumeActions}>
-                      <Tooltip title="生成本卷细纲">
-                        <Button
-                          type="text" size="small"
-                          icon={<ThunderboltOutlined />}
-                          loading={generatingVolume === vol.id}
-                          disabled={!outlineConfirmed}
-                          onClick={() => generateVolumeSynopsis(vol)}
-                        />
-                      </Tooltip>
-                      <Tooltip title="新建章节">
-                        <Button type="text" size="small" icon={<PlusOutlined />} disabled={!outlineConfirmed} onClick={() => addChapter(vol.id)} />
-                      </Tooltip>
-                      <Popconfirm title="删除此卷？已开始写作的卷会被后端拦截" onConfirm={() => deleteVolume(vol.id)} okText="删除" cancelText="取消">
-                        <Button type="text" size="small" danger disabled={!outlineConfirmed} style={{ fontSize: 10 }}>×</Button>
-                      </Popconfirm>
-                    </div>
                   </div>
+                  {bookPlanApproved && !volumeApproved ? (
+                    <div className={styles.emptyTreeHint}>打开本卷，生成并审批整卷章节细纲。</div>
+                  ) : null}
+                  {bookPlanApproved && volumeApproved ? volumeChapters.map(ch => (
+                    <ChapterContentItem
+                      key={ch.id}
+                      ch={ch}
+                      active={currentView === 'chapter' && currentChapter?.id === ch.id}
+                      disabled={!outlineConfirmed}
+                      onOpenContent={() => openChapterContent(ch)}
+                    />
+                  )) : null}
                 </div>
               )
             })}
-
-            <div className={styles.chapterHeader}>
-              <span>正文</span>
-              <Tooltip title="新建章节正文">
-                <Button type="text" size="small" icon={<PlusOutlined />} disabled={!outlineConfirmed} onClick={() => addChapter()} />
-              </Tooltip>
-            </div>
-            {orderedChapters.map(ch => (
-              <ChapterContentItem
-                key={ch.id}
-                ch={ch}
-                active={currentView === 'chapter' && currentChapter?.id === ch.id}
-                disabled={!outlineConfirmed}
-                onOpenContent={() => openChapterContent(ch)}
-              />
-            ))}
           </div>
         </div>
       )}
-
-      {/* 新建卷弹窗 */}
-      <Modal
-        title="新建卷"
-        open={volumeOpen}
-        onCancel={() => setVolumeOpen(false)}
-        onOk={() => volumeForm.submit()}
-        okText="创建"
-        cancelText="取消"
-      >
-        <Form form={volumeForm} layout="vertical" onFinish={createVolume}>
-          <Form.Item name="title" label="卷名" rules={[{ required: true }]}>
-            <Input placeholder="如：第一卷 凡人修仙" />
-          </Form.Item>
-          <Form.Item name="description" label="简介">
-            <Input.TextArea rows={2} placeholder="本卷剧情简介（可选）" />
-          </Form.Item>
-        </Form>
-      </Modal>
 
       <Modal
         title="重新生成书名"

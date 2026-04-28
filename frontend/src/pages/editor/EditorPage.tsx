@@ -14,6 +14,8 @@ import ChapterPage from '../ChapterPage'
 import VolumePage from '../VolumePage'
 import AdminWorkflowPage from '../AdminWorkflowPage'
 import NovelSynopsisPage from '../NovelSynopsisPage'
+import BookVolumesPage from '../BookVolumesPage'
+import RelationshipNetworkPage from '../RelationshipNetworkPage'
 
 function EditorContent() {
   const { novelId } = useParams()
@@ -131,7 +133,9 @@ function EditorContent() {
   switch (activeTab.type) {
     case 'outline': return <OutlinePage />
     case 'novel_synopsis': return <NovelSynopsisPage />
+    case 'book_volumes': return <BookVolumesPage />
     case 'characters': return <CharactersPage />
+    case 'relationship_network': return <RelationshipNetworkPage />
     case 'worldbuilding': return <WorldbuildingPage />
     case 'volume': return <VolumePage />
     case 'chapter_synopsis': return currentNovel ? <VolumePage /> : null

@@ -113,11 +113,11 @@ def _ensure_schema():
     if "ai_generation_jobs" in tables and engine.dialect.name == "mysql":
         columns = {col["name"]: col for col in inspector.get_columns("ai_generation_jobs")}
         job_type = str(columns.get("job_type", {}).get("type", ""))
-        if "assistant_workflow" not in job_type:
+        if "assistant_workflow" not in job_type or "book_volumes" not in job_type:
             alter_sqls.append(
                 "ALTER TABLE ai_generation_jobs MODIFY COLUMN job_type "
                 "ENUM('outline','titles','book_synopsis','characters','worldbuilding',"
-                "'chapter_synopsis','chapter_content','volume_synopsis','chapter_segment',"
+                "'book_volumes','chapter_synopsis','chapter_content','volume_synopsis','chapter_segment',"
                 "'chat','assistant_workflow') NOT NULL"
             )
 

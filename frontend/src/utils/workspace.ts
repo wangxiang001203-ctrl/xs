@@ -3,7 +3,9 @@ import type { Chapter, Novel, Volume } from '../types'
 export type WorkspaceTabType =
   | 'outline'
   | 'novel_synopsis'
+  | 'book_volumes'
   | 'characters'
+  | 'relationship_network'
   | 'worldbuilding'
   | 'volume'
   | 'chapter_synopsis'
@@ -41,8 +43,12 @@ export function buildWorkspaceTitle(type: WorkspaceTabType, novel?: Novel | null
       return '大纲'
     case 'novel_synopsis':
       return '简介'
+    case 'book_volumes':
+      return '全书分卷'
     case 'characters':
       return '角色'
+    case 'relationship_network':
+      return '关系网'
     case 'worldbuilding':
       return worldbuildingSectionName || '世界观'
     case 'volume':
@@ -67,6 +73,10 @@ export function getDocumentDraftKey(tab: Pick<WorkspaceTab, 'type' | 'novelId' |
       return tab.novelId ? `outline:${tab.novelId}` : null
     case 'novel_synopsis':
       return tab.novelId ? `novel_synopsis:${tab.novelId}` : null
+    case 'book_volumes':
+      return tab.novelId ? `book_volumes:${tab.novelId}` : null
+    case 'relationship_network':
+      return tab.novelId ? `relationship_network:${tab.novelId}` : null
     case 'worldbuilding':
       return tab.novelId ? `worldbuilding:${tab.novelId}` : null
     case 'volume':

@@ -36,6 +36,13 @@ def _positive_int(value) -> int:
     return number if number > 0 else 0
 
 
+def _safe_text(value, default: str = "") -> str:
+    if value is None:
+        return default
+    text = str(value).strip()
+    return text or default
+
+
 def _extract_chapter_count_from_markdown(markdown: str | None) -> int:
     if not markdown:
         return 0
@@ -129,6 +136,58 @@ class VolumeWorkspaceOut(BaseModel):
     volume_synopsis_markdown: str = ""
     chapters: list[dict]
     pending_proposals: list[dict]
+
+
+class BookVolumePlanOut(BaseModel):
+    book_plan_markdown: str = ""
+    approved: bool = False
+    volumes: list[VolumeOut]
+
+
+def _book_plan_status(volume: Volume) -> str:
+    plan_data = volume.plan_data or {}
+    return _safe_text(plan_data.get("book_plan_status"), "draft")
+
+
+def _book_plan_markdown_for_volume(volume: Volume) -> str:
+    plan_data = volume.plan_data or {}
+    saved_markdown = _safe_text(plan_data.get("book_plan_markdown"))
+    if saved_markdown:
+        return saved_markdown
+
+    lines = [
+        f"## 第{volume.volume_number}卷 {volume.title}",
+        f"目标字数：{volume.target_words or 0}",
+        f"预计章节数：{volume.planned_chapter_count or 0}",
+    ]
+    if volume.description:
+        lines.append(f"本卷定位：{volume.description.strip()}")
+    if volume.main_line:
+        lines.append(f"本卷主线：{volume.main_line.strip()}")
+    if volume.character_arc:
+        lines.append(f"人物成长：{volume.character_arc.strip()}")
+    if volume.ending_hook:
+        lines.append(f"卷末钩子：{volume.ending_hook.strip()}")
+    return "\n".join(lines).strip()
+
+
+def _build_book_volume_plan_markdown(volumes: list[Volume]) -> str:
+    if not volumes:
+        return ""
+    parts = ["# 全书分卷", "", "这份文档只定义整本书的卷级推进。章节细纲需要进入具体卷后单独生成和审批。", ""]
+    for volume in sorted(volumes, key=lambda item: item.volume_number):
+        parts.append(_book_plan_markdown_for_volume(volume))
+        parts.append("")
+    return "\n".join(parts).strip()
+
+
+def _serialize_volume_out(db: Session, volume: Volume) -> VolumeOut:
+    _normalize_volume_defaults(volume)
+    count = db.query(Chapter).filter(Chapter.volume_id == volume.id).count()
+    out = VolumeOut.model_validate(volume)
+    out.chapter_count = count
+    out.planned_chapter_count = _effective_planned_chapter_count(volume, count)
+    return out
 
 
 def _build_volume_synopsis_markdown(volume: Volume, chapters: list[Chapter], synopsis_by_chapter: dict[str, Synopsis]) -> str:
@@ -313,15 +372,7 @@ def _sync_chapter_synopsis_drafts(
 @router.get("/", response_model=list[VolumeOut])
 def list_volumes(novel_id: str, db: Session = Depends(get_db)):
     volumes = db.query(Volume).filter(Volume.novel_id == novel_id).order_by(Volume.volume_number).all()
-    result = []
-    for v in volumes:
-        _normalize_volume_defaults(v)
-        count = db.query(Chapter).filter(Chapter.volume_id == v.id).count()
-        out = VolumeOut.model_validate(v)
-        out.chapter_count = count
-        out.planned_chapter_count = _effective_planned_chapter_count(v, count)
-        result.append(out)
-    return result
+    return [_serialize_volume_out(db, v) for v in volumes]
 
 
 @router.post("/", response_model=VolumeOut)
@@ -348,6 +399,43 @@ def create_volume(novel_id: str, body: VolumeCreate, db: Session = Depends(get_d
     out.chapter_count = 0
     out.planned_chapter_count = _effective_planned_chapter_count(v, 0)
     return out
+
+
+@router.get("/book-plan", response_model=BookVolumePlanOut)
+def get_book_volume_plan(novel_id: str, db: Session = Depends(get_db)):
+    volumes = db.query(Volume).filter(Volume.novel_id == novel_id).order_by(Volume.volume_number).all()
+    approved = bool(volumes) and all(_book_plan_status(volume) == "approved" for volume in volumes)
+    return BookVolumePlanOut(
+        book_plan_markdown=_build_book_volume_plan_markdown(volumes),
+        approved=approved,
+        volumes=[_serialize_volume_out(db, volume) for volume in volumes],
+    )
+
+
+@router.post("/book-plan/approve", response_model=BookVolumePlanOut)
+def approve_book_volume_plan(novel_id: str, db: Session = Depends(get_db)):
+    volumes = db.query(Volume).filter(Volume.novel_id == novel_id).order_by(Volume.volume_number).all()
+    if not volumes:
+        raise HTTPException(400, "请先让 AI 生成全书分卷，再审批。")
+
+    approved_at = datetime.utcnow().isoformat()
+    for volume in volumes:
+        plan_data = {**(volume.plan_data or {})}
+        plan_data["book_plan_status"] = "approved"
+        plan_data["book_plan_approved_at"] = approved_at
+        plan_data["book_plan_markdown"] = _book_plan_markdown_for_volume(volume)
+        volume.plan_data = plan_data
+
+    db.commit()
+    for volume in volumes:
+        db.refresh(volume)
+        save_volume_plan(novel_id, volume.volume_number, volume.plan_markdown or "", volume.plan_data or {})
+
+    return BookVolumePlanOut(
+        book_plan_markdown=_build_book_volume_plan_markdown(volumes),
+        approved=True,
+        volumes=[_serialize_volume_out(db, volume) for volume in volumes],
+    )
 
 
 @router.patch("/{volume_id}", response_model=VolumeOut)

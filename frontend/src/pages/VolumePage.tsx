@@ -334,6 +334,7 @@ export default function VolumePage() {
   ), [chapterOutlines])
 
   const volumeApproved = workspace?.volume.review_status === 'approved'
+  const bookPlanApproved = workspace?.volume.plan_data?.book_plan_status === 'approved'
   const orderedWorkspaceChapters = useMemo(
     () => [...(workspace?.chapters || [])].sort((a, b) => a.chapter_number - b.chapter_number),
     [workspace?.chapters],
@@ -397,15 +398,24 @@ export default function VolumePage() {
           </div>
         </div>
         <Space>
-          <Button icon={<SaveOutlined />} onClick={savePlan} loading={saving}>保存卷计划</Button>
-          <Button icon={<ThunderboltOutlined />} onClick={generateVolumeSynopsis} loading={generating}>
+          <Button icon={<SaveOutlined />} onClick={savePlan} loading={saving} disabled={!bookPlanApproved}>保存卷计划</Button>
+          <Button icon={<ThunderboltOutlined />} onClick={generateVolumeSynopsis} loading={generating} disabled={!bookPlanApproved}>
             生成本卷全部细纲
           </Button>
-          <Button type="primary" icon={<CheckOutlined />} onClick={approveVolume} loading={approving}>
+          <Button type="primary" icon={<CheckOutlined />} onClick={approveVolume} loading={approving} disabled={!bookPlanApproved}>
             审批本卷节奏
           </Button>
         </Space>
       </div>
+
+      {!bookPlanApproved ? (
+        <Alert
+          type="warning"
+          showIcon
+          message="全书分卷尚未审批。请先在“全书分卷”页确认整本书的卷级推进，再生成本卷章节细纲。"
+          className={styles.alert}
+        />
+      ) : null}
 
       {workspace?.pending_proposals?.length ? (
         <Alert

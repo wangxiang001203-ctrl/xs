@@ -1,0 +1,173 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.48);
+  backdrop-filter: blur(12px);
+}
+
+.title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+  padding: 18px;
+}
+
+.leftPane,
+.volumeList {
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--bg-paper);
+  box-shadow: var(--shadow);
+}
+
+.leftPane {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+
+.alert {
+  flex-shrink: 0;
+}
+
+.instruction {
+  flex-shrink: 0;
+}
+
+.planDoc {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.planDoc pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.9;
+  color: var(--text-primary);
+}
+
+.emptyDoc,
+.emptyList,
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.emptyDoc {
+  height: 100%;
+  min-height: 280px;
+  border: 1px dashed rgba(47, 125, 134, 0.22);
+  border-radius: 12px;
+}
+
+.empty {
+  height: 100%;
+}
+
+.volumeList {
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+  gap: 10px;
+  overflow: auto;
+}
+
+.listTitle {
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.volumeItem {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.volumeItem:hover {
+  border-color: var(--accent);
+  background: rgba(244, 250, 248, 0.92);
+}
+
+.volumeIcon {
+  color: var(--primary);
+}
+
+.volumeBody {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.volumeBody strong,
+.volumeBody span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.volumeBody strong {
+  font-size: 13px;
+}
+
+.volumeBody span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.emptyList {
+  flex: 1;
+  min-height: 180px;
+  border: 1px dashed rgba(47, 125, 134, 0.22);
+  border-radius: 12px;
+}

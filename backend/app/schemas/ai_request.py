@@ -39,6 +39,11 @@ class GenerateBookSynopsisRequest(BaseModel):
     dry_run: bool = False
 
 
+class GenerateBookVolumesRequest(BaseModel):
+    novel_id: str
+    extra_instruction: Optional[str] = None
+
+
 class GenerateSynopsisRequest(BaseModel):
     novel_id: str
     chapter_id: str

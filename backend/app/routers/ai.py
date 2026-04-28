@@ -17,6 +17,7 @@ from app.schemas.ai_request import (
     ChatRequest,
     CreateMissingCharactersRequest,
     GenerateBookSynopsisRequest,
+    GenerateBookVolumesRequest,
     GenerateChapterRequest,
     GenerateChapterSegmentRequest,
     GenerateCharactersFromOutlineRequest,
@@ -647,6 +648,65 @@ def _serialize_synopsis(synopsis: Synopsis) -> dict:
 
 def _serialize_chapter(chapter: Chapter) -> dict:
     return ChapterContentOut.model_validate(chapter).model_dump(mode="json")
+
+
+def _book_plan_status(volume: Volume) -> str:
+    plan_data = volume.plan_data or {}
+    return _safe_text(plan_data.get("book_plan_status"), "draft")
+
+
+def _single_volume_book_plan_markdown(volume: Volume) -> str:
+    plan_data = volume.plan_data or {}
+    saved = _safe_text(plan_data.get("book_plan_markdown"))
+    if saved:
+        return saved
+    lines = [
+        f"## 第{volume.volume_number}卷 {volume.title}",
+        f"目标字数：{volume.target_words or 0}",
+        f"预计章节数：{volume.planned_chapter_count or 0}",
+    ]
+    if volume.description:
+        lines.append(f"本卷定位：{volume.description.strip()}")
+    if volume.main_line:
+        lines.append(f"本卷主线：{volume.main_line.strip()}")
+    if volume.character_arc:
+        lines.append(f"人物成长：{volume.character_arc.strip()}")
+    if volume.ending_hook:
+        lines.append(f"卷末钩子：{volume.ending_hook.strip()}")
+    return "\n".join(lines).strip()
+
+
+def _book_volume_plan_markdown(volumes: list[Volume]) -> str:
+    if not volumes:
+        return ""
+    parts = ["# 全书分卷", "", "这份文档只定义整本书的卷级推进。章节细纲需要进入具体卷后单独生成和审批。", ""]
+    for volume in sorted(volumes, key=lambda item: item.volume_number):
+        parts.append(_single_volume_book_plan_markdown(volume))
+        parts.append("")
+    return "\n".join(parts).strip()
+
+
+def _serialize_volume_for_plan(db: Session, volume: Volume) -> dict:
+    count = db.query(Chapter).filter(Chapter.volume_id == volume.id).count()
+    return {
+        "id": volume.id,
+        "novel_id": volume.novel_id,
+        "volume_number": volume.volume_number,
+        "title": volume.title,
+        "description": volume.description,
+        "target_words": volume.target_words or 0,
+        "planned_chapter_count": volume.planned_chapter_count or count or 0,
+        "main_line": volume.main_line,
+        "character_arc": volume.character_arc,
+        "ending_hook": volume.ending_hook,
+        "plan_markdown": volume.plan_markdown,
+        "plan_data": volume.plan_data or {},
+        "synopsis_generated": bool(volume.synopsis_generated),
+        "review_status": volume.review_status or "draft",
+        "approved_at": volume.approved_at.isoformat() if volume.approved_at else None,
+        "created_at": volume.created_at.isoformat() if volume.created_at else None,
+        "chapter_count": count,
+    }
 
 
 def _serialize_memory(memory: ChapterMemory) -> dict:
@@ -1329,6 +1389,158 @@ async def _execute_full_chapter_job(db: Session, payload: dict, job_id: str) -> 
     }
 
 
+async def _execute_book_volumes_job(db: Session, payload: dict, job_id: str) -> dict:
+    novel = db.query(Novel).filter(Novel.id == payload["novel_id"]).first()
+    if not novel:
+        raise HTTPException(404, "小说不存在")
+
+    outline = db.query(Outline).filter(
+        Outline.novel_id == payload["novel_id"],
+        Outline.confirmed == True,
+    ).order_by(Outline.version.desc()).first()
+    if not outline:
+        raise HTTPException(400, "请先确认大纲。全书分卷必须建立在已确认大纲上。")
+
+    existing_volumes = db.query(Volume).filter(Volume.novel_id == payload["novel_id"]).order_by(Volume.volume_number).all()
+    blocked = [
+        volume
+        for volume in existing_volumes
+        if db.query(Chapter).filter(Chapter.volume_id == volume.id).count() > 0
+    ]
+    if blocked:
+        first = blocked[0]
+        raise HTTPException(
+            400,
+            f"《{first.title}》已经生成了章节细纲或正文，不能一键重生成全书分卷。请在现有全书分卷上审批或调整未开写的卷。",
+        )
+
+    prompt = f"""请基于已确认的大纲，生成“全书分卷”规划。
+
+要求：
+1. 只做卷级规划，不要生成章节细纲，不要输出正文。
+2. 每一卷必须说明：本卷目标、核心冲突、主角状态变化、重要人物推进、关键地点/势力/道具、结尾钩子。
+3. 预计章节数要适合网文长篇节奏；如果用户没有指定，每卷可按 30-50 章规划。
+4. 分卷之间要连续推进，不能出现主角从 B 地区升级后又无理由回到 A 地区重新升级这类倒退矛盾。
+5. 只输出合法 JSON，不要 Markdown 代码块，不要解释。
+
+JSON 契约：
+{{
+  "volumes": [
+    {{
+      "volume_number": 1,
+      "title": "卷名",
+      "target_words": 120000,
+      "planned_chapter_count": 40,
+      "description": "本卷定位，一两句话",
+      "main_line": "本卷主线",
+      "core_conflict": "核心冲突",
+      "character_arc": "主角和核心人物的推进",
+      "ending_hook": "卷末钩子",
+      "key_settings": ["地点/势力/道具/规则"],
+      "book_plan_markdown": "## 第一卷 卷名\\n目标字数：...\\n预计章节数：...\\n本卷目标：...\\n核心冲突：...\\n人物推进：...\\n关键设定：...\\n卷末钩子：..."
+    }}
+  ]
+}}
+
+作品标题：{novel.title}
+作品简介：{novel.synopsis or "（暂无）"}
+
+已确认大纲：
+{outline.content or outline.main_plot or "（暂无大纲正文）"}
+"""
+    if payload.get("extra_instruction"):
+        prompt += f"\n\n额外要求：{payload['extra_instruction']}"
+
+    full_text = await ai_job_service.collect_text(
+        job_id=job_id,
+        system_prompt=SYSTEM_NOVEL,
+        user_prompt=prompt,
+        progress_message="AI 正在生成全书分卷规划...",
+    )
+    try:
+        data = await _loads_ai_json_with_retries(
+            job_id=job_id,
+            label="全书分卷生成",
+            response_text=full_text,
+            json_contract="JSON 对象，必须包含 volumes 数组；每个元素是一卷规划，不允许包含章节正文。",
+            expected_root=(dict,),
+        )
+    except AIJsonFormatError as exc:
+        raise HTTPException(400, exc.detail)
+
+    volume_items = data.get("volumes") or []
+    if not isinstance(volume_items, list) or not volume_items:
+        raise HTTPException(400, "AI 没有返回可用的分卷列表，请补充大纲信息后重试。")
+
+    for volume in existing_volumes:
+        db.delete(volume)
+    db.flush()
+
+    created: list[Volume] = []
+    for index, item in enumerate(volume_items, start=1):
+        if not isinstance(item, dict):
+            continue
+        volume_number = _positive_int(item.get("volume_number") or item.get("volume_no") or index) or index
+        title = _safe_text(item.get("title"), f"第{volume_number}卷")
+        target_words = _positive_int(item.get("target_words")) or 120000
+        planned_count = _positive_int(item.get("planned_chapter_count") or item.get("chapter_count")) or 40
+        description = _safe_text(item.get("description") or item.get("summary") or item.get("positioning"))
+        main_line = _safe_text(item.get("main_line"))
+        character_arc = _safe_text(item.get("character_arc"))
+        ending_hook = _safe_text(item.get("ending_hook"))
+        single_markdown = _safe_text(item.get("book_plan_markdown"))
+        if not single_markdown:
+            key_settings = "、".join(str(value) for value in _safe_list(item.get("key_settings")) if str(value).strip())
+            single_markdown = "\n".join([
+                f"## 第{volume_number}卷 {title}",
+                f"目标字数：{target_words}",
+                f"预计章节数：{planned_count}",
+                f"本卷目标：{description or main_line or '待补充'}",
+                f"核心冲突：{_safe_text(item.get('core_conflict'), '待补充')}",
+                f"人物推进：{character_arc or '待补充'}",
+                f"关键设定：{key_settings or '待补充'}",
+                f"卷末钩子：{ending_hook or '待补充'}",
+            ])
+
+        volume = Volume(
+            novel_id=payload["novel_id"],
+            volume_number=volume_number,
+            title=title,
+            description=description,
+            target_words=target_words,
+            planned_chapter_count=planned_count,
+            main_line=main_line,
+            character_arc=character_arc,
+            ending_hook=ending_hook,
+            plan_markdown=single_markdown,
+            plan_data={
+                **item,
+                "book_plan_status": "draft",
+                "book_plan_markdown": single_markdown,
+            },
+            review_status="draft",
+            synopsis_generated=False,
+        )
+        db.add(volume)
+        created.append(volume)
+
+    if not created:
+        raise HTTPException(400, "AI 返回的分卷数据无法入库，请重试。")
+
+    db.commit()
+    refreshed = db.query(Volume).filter(Volume.novel_id == payload["novel_id"]).order_by(Volume.volume_number).all()
+    for volume in refreshed:
+        save_volume_plan(payload["novel_id"], volume.volume_number, volume.plan_markdown or "", volume.plan_data or {})
+
+    return {
+        "status": "ok",
+        "volume_count": len(refreshed),
+        "approved": all(_book_plan_status(volume) == "approved" for volume in refreshed),
+        "book_plan_markdown": _book_volume_plan_markdown(refreshed),
+        "volumes": [_serialize_volume_for_plan(db, volume) for volume in refreshed],
+    }
+
+
 async def _execute_volume_synopsis_job(db: Session, payload: dict, job_id: str) -> dict:
     volume = db.query(Volume).filter(
         Volume.id == payload["volume_id"],
@@ -1826,6 +2038,8 @@ async def _process_job(job_id: str):
             result = await _execute_titles_job(db, payload, job_id)
         elif job.job_type == "book_synopsis":
             result = await _execute_book_synopsis_job(db, payload, job_id)
+        elif job.job_type == "book_volumes":
+            result = await _execute_book_volumes_job(db, payload, job_id)
         elif job.job_type == "chapter_synopsis":
             result = await _execute_chapter_synopsis_job(db, payload, job_id)
         elif job.job_type == "chapter_content":
@@ -2003,6 +2217,21 @@ async def generate_book_synopsis(
         background_tasks=background_tasks,
         db=db,
         job_type="book_synopsis",
+        novel_id=req.novel_id,
+        request_payload=req.model_dump(),
+    )
+
+
+@router.post("/generate/book-volumes", response_model=AIGenerationJobOut)
+async def generate_book_volumes(
+    req: GenerateBookVolumesRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    return _queue_job(
+        background_tasks=background_tasks,
+        db=db,
+        job_type="book_volumes",
         novel_id=req.novel_id,
         request_payload=req.model_dump(),
     )

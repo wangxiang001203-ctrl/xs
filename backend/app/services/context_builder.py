@@ -202,19 +202,7 @@ def build_volume_synopsis_context(db: Session, novel_id: str, volume_id: str) ->
         "rules": ["规则名"],
         "realms": ["境界名"]
       }},
-      "proposal_candidates": [
-        {{
-          "entity_type": "item",
-          "name": "新道具名",
-          "reason": "为什么首次出现它是合理的",
-          "target_section": "items",
-          "entry": {{
-            "name": "新道具名",
-            "summary": "一句话定义",
-            "details": "详细说明"
-          }}
-        }}
-      ],
+      "proposal_candidates": [],
       "opening": {{
         "scene": "开场场景描述",
         "mood": "基调/氛围",
@@ -242,7 +230,7 @@ def build_volume_synopsis_context(db: Session, novel_id: str, volume_id: str) ->
 1. 必须为本卷所有{len(chapters)}章都生成细纲
 2. 章节编号从{chapters[0].chapter_number}到{chapters[-1].chapter_number}
 3. 优先使用已有角色列表、世界观设定中的实体
-4. 如果确实首次出现新人物/新道具/新规则，必须放入 proposal_candidates 等待作者审批
+4. 细纲阶段只做规划，不生成正式设定提案；如果确实需要新人物/新道具/新规则，写进 content_md 和 referenced_entities，proposal_candidates 固定输出空数组
 5. referenced_entities 必须只填写本章真正用到的实体
 6. 整卷节奏要合理，避免重复套路""")
 
@@ -345,19 +333,7 @@ def build_synopsis_context(db: Session, novel_id: str, chapter_number: int) -> s
     "rules": ["规则名"],
     "realms": ["境界名"]
   }},
-  "proposal_candidates": [
-    {{
-      "entity_type": "item",
-      "name": "新道具名",
-      "reason": "为什么首次出现它是合理的",
-      "target_section": "items",
-      "entry": {{
-        "name": "新道具名",
-        "summary": "一句话定义",
-        "details": "详细说明"
-      }}
-    }}
-  ],
+  "proposal_candidates": [],
   "opening": {{
     "scene": "开场场景描述",
     "mood": "基调/氛围",
@@ -381,7 +357,7 @@ def build_synopsis_context(db: Session, novel_id: str, chapter_number: int) -> s
 注意：
 1. 细纲正文请写在 content_md 中，给作者直接阅读和修改
 2. 优先使用已有角色列表、世界观设定中的实体
-3. 如果确实首次出现新人物/新道具/新规则，不得当作已存在事实直接写死，必须放入 proposal_candidates 等待作者审批
+3. 如果确实首次出现新人物/新道具/新规则，只写进 content_md 和 referenced_entities，proposal_candidates 固定输出空数组；正式设定提案留到正文定稿检查阶段生成
 4. referenced_entities 必须只填写本章真正用到的实体""")
 
     return "\n".join(parts)
@@ -620,8 +596,8 @@ def build_volume_synopsis_context(
 
 ### 4. 实体引用规则（重要）
 - **优先使用已有角色**：从角色列表中选择，不要随意创造新角色
-- **新角色必须有理由**：如果必须新增角色，在proposal_candidates中说明
-- **道具/功法首次出现**：要评估合理性，提交提案
+- **新角色必须有理由**：如果必须新增角色，在 content_md 里说明第一次出场的必要性
+- **道具/功法首次出现**：只写入本章细纲和 referenced_entities，不在细纲阶段提交入库提案
 - **严禁幻觉**：不能引用不存在的角色、道具、地点
 
 ### 5. 输出格式
@@ -648,19 +624,7 @@ def build_volume_synopsis_context(
       "rules": ["炼气期不能御空飞行"],
       "realms": ["炼气九层", "筑基后期"]
     }},
-    "proposal_candidates": [
-      {{
-        "entity_type": "item",
-        "name": "新道具名",
-        "reason": "首次出现合理性",
-        "target_section": "items",
-        "entry": {{
-          "name": "新道具名",
-          "summary": "一句话定义",
-          "details": "详细说明"
-        }}
-      }}
-    ],
+    "proposal_candidates": [],
     "opening": {{
       "scene": "开场场景",
       "mood": "基调氛围",
@@ -686,7 +650,7 @@ def build_volume_synopsis_context(
 1. 数组长度必须等于本次章节数（{len(chapters)}章）
 2. chapter_number 与章节列表一一对应
 3. 章节间剧情要连贯，前一章的 next_chapter_hook 要与下一章的 opening 呼应
-4. 优先使用已有角色和世界观实体；如果确需首次出现新实体，必须放进 proposal_candidates，等待作者审批
+4. 优先使用已有角色和世界观实体；如果确需首次出现新实体，只在本章细纲中交代清楚，proposal_candidates 固定输出空数组，正式设定提案留到正文定稿检查阶段生成
 5. content_md 是给作者读和改的整章细纲，必须是一整块 Markdown 文本；不要再写“第X章”标题，标题只放在 title 字段
 6. 只输出JSON，不要输出任何说明文字""")
 

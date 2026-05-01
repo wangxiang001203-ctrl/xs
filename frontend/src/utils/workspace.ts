@@ -8,7 +8,6 @@ export type WorkspaceTabType =
   | 'relationship_network'
   | 'worldbuilding'
   | 'volume'
-  | 'chapter_synopsis'
   | 'chapter'
   | 'admin'
 
@@ -30,7 +29,6 @@ export interface WorkspaceTab {
 export function getWorkspaceTabId(type: WorkspaceTabType, novelId?: string, chapterId?: string, volumeId?: string, worldbuildingSectionId?: string) {
   if (type === 'admin') return 'admin'
   if (type === 'chapter') return `chapter:${chapterId || 'unknown'}`
-  if (type === 'chapter_synopsis') return `chapter_synopsis:${chapterId || 'unknown'}`
   if (type === 'volume') return `volume:${volumeId || 'unknown'}`
   if (type === 'worldbuilding') return `worldbuilding:${novelId || 'global'}:${worldbuildingSectionId || 'overview'}`
   return `${type}:${novelId || 'global'}`
@@ -54,9 +52,6 @@ export function buildWorkspaceTitle(type: WorkspaceTabType, novel?: Novel | null
     case 'volume':
       if (!volume) return '分卷'
       return `分卷 · ${volume.title}`
-    case 'chapter_synopsis':
-      if (!chapter) return '细纲'
-      return `细纲 · ${chapter.title || `第${chapter.chapter_number}章`}`
     case 'chapter':
       if (!chapter) return '章节'
       return `正文 · ${chapter.title || `第${chapter.chapter_number}章`}`
@@ -81,8 +76,6 @@ export function getDocumentDraftKey(tab: Pick<WorkspaceTab, 'type' | 'novelId' |
       return tab.novelId ? `worldbuilding:${tab.novelId}` : null
     case 'volume':
       return tab.volumeId ? `volume:${tab.volumeId}` : null
-    case 'chapter_synopsis':
-      return tab.chapterId ? `chapter_synopsis:${tab.chapterId}` : null
     case 'chapter':
       return tab.chapterId ? `chapter:${tab.chapterId}` : null
     default:

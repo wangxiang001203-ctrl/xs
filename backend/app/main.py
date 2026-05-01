@@ -110,6 +110,26 @@ def _ensure_schema():
         if "approved_at" not in columns:
             alter_sqls.append("ALTER TABLE synopses ADD COLUMN approved_at DATETIME")
 
+    if "story_entities" in tables:
+        columns = {col["name"] for col in inspector.get_columns("story_entities")}
+        if "graph_role" not in columns:
+            alter_sqls.append("ALTER TABLE story_entities ADD COLUMN graph_role VARCHAR(40) DEFAULT 'supporting'")
+        if "importance" not in columns:
+            alter_sqls.append("ALTER TABLE story_entities ADD COLUMN importance INTEGER DEFAULT 3")
+        if "graph_layer" not in columns:
+            alter_sqls.append("ALTER TABLE story_entities ADD COLUMN graph_layer INTEGER DEFAULT 2")
+        if "graph_position" not in columns:
+            alter_sqls.append("ALTER TABLE story_entities ADD COLUMN graph_position JSON")
+
+    if "entity_relations" in tables:
+        columns = {col["name"] for col in inspector.get_columns("entity_relations")}
+        if "relation_strength" not in columns:
+            alter_sqls.append("ALTER TABLE entity_relations ADD COLUMN relation_strength FLOAT DEFAULT 1.0")
+        if "is_bidirectional" not in columns:
+            alter_sqls.append("ALTER TABLE entity_relations ADD COLUMN is_bidirectional BOOLEAN DEFAULT FALSE")
+        if "confidence" not in columns:
+            alter_sqls.append("ALTER TABLE entity_relations ADD COLUMN confidence FLOAT DEFAULT 1.0")
+
     if "ai_generation_jobs" in tables and engine.dialect.name == "mysql":
         columns = {col["name"]: col for col in inspector.get_columns("ai_generation_jobs")}
         job_type = str(columns.get("job_type", {}).get("type", ""))

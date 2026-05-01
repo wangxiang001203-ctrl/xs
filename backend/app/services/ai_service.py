@@ -12,14 +12,9 @@ from app.services import model_gateway
 
 
 async def stream_generate(system_prompt: str, user_prompt: str, model: str | None = None) -> AsyncGenerator[str, None]:
-    async for text in model_gateway.stream_chat_completion(
-        [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        model=model,
-    ):
-        yield text
+    # Compatibility shim only. Product policy is non-streaming AI; callers
+    # should use generate_once/generate_once_with_history.
+    yield await generate_once(system_prompt, user_prompt, model)
 
 
 async def generate_once(system_prompt: str, user_prompt: str, model: str | None = None) -> str:
@@ -30,14 +25,19 @@ async def generate(system_prompt: str, user_prompt: str, model: str | None = Non
     return await generate_once(system_prompt, user_prompt, model)
 
 
-async def stream_generate_with_history(system_prompt: str, messages: list[dict], model: str | None = None) -> AsyncGenerator[str, None]:
+async def generate_once_with_history(system_prompt: str, messages: list[dict], model: str | None = None) -> str:
     normalized = [
         {"role": item.get("role", "user"), "content": item.get("content", "")}
         for item in messages
         if isinstance(item, dict)
     ]
-    async for text in model_gateway.stream_chat_completion(
+    result = await model_gateway.chat_completion(
         [{"role": "system", "content": system_prompt}] + normalized,
         model=model,
-    ):
-        yield text
+    )
+    return result.content
+
+
+async def stream_generate_with_history(system_prompt: str, messages: list[dict], model: str | None = None) -> AsyncGenerator[str, None]:
+    # Compatibility shim only. Product policy is non-streaming AI.
+    yield await generate_once_with_history(system_prompt, messages, model)

@@ -74,7 +74,7 @@ export default function CharactersPage() {
   const [editing, setEditing] = useState<Character | null>(null)
   const [generating, setGenerating] = useState(false)
   const [characterDrafts, setCharacterDrafts] = useState<CharacterDraft[]>([])
-  const [applyingDrafts, setApplyingDrafts] = useState(false)
+  const [applyingDraftName, setApplyingDraftName] = useState<string | null>(null)
   const [linkedEntity, setLinkedEntity] = useState<StoryEntity | null>(null)
   const [mentions, setMentions] = useState<EntityMention[]>([])
   const [events, setEvents] = useState<EntityEvent[]>([])
@@ -109,6 +109,25 @@ export default function CharactersPage() {
       profile_md: characterProfileFromFields(char),
     })
     setOpen(true)
+  }
+
+  function closeEditor() {
+    setOpen(false)
+    setEditing(null)
+    setLinkedEntity(null)
+    setMentions([])
+    setEvents([])
+    form.resetFields()
+  }
+
+  function closeCharacterDrafts() {
+    setCharacterDrafts([])
+    setApplyingDraftName(null)
+  }
+
+  function closeEventEditor() {
+    setEventOpen(false)
+    eventForm.resetFields()
   }
 
   useEffect(() => {
@@ -176,7 +195,7 @@ export default function CharactersPage() {
         setCharacters([...characters, created])
         message.success('角色已创建')
       }
-      setOpen(false)
+      closeEditor()
     } catch (error: unknown) {
       const err = error as { response?: { data?: { detail?: string } } }
       message.error(err?.response?.data?.detail || '操作失败')
@@ -185,7 +204,12 @@ export default function CharactersPage() {
 
   async function handleDelete(char: Character) {
     if (!currentNovel) return
-    await api.characters.delete(currentNovel.id, char.id)
+    const result = await api.characters.delete(currentNovel.id, char.id)
+    if (result.archived && result.character) {
+      setCharacters(characters.map(item => item.id === result.character?.id ? result.character : item))
+      message.warning('该角色已有正文/事件/关系记录，已改为停用保留，未硬删除')
+      return
+    }
     setCharacters(characters.filter(item => item.id !== char.id))
     message.success('已删除')
   }
@@ -213,8 +237,7 @@ export default function CharactersPage() {
       const updated = await api.entities.recompute(currentNovel.id, linkedEntity.id)
       setLinkedEntity(updated)
       await loadCharacterTrace(editing)
-      setEventOpen(false)
-      eventForm.resetFields()
+      closeEventEditor()
       message.success('角色变化已补记')
     } catch (err: any) {
       message.error(err?.response?.data?.detail || '补记失败')
@@ -244,38 +267,42 @@ export default function CharactersPage() {
       })
   }
 
-  async function applyCharacterDrafts() {
-    if (!currentNovel || !characterDrafts.length) return
-    setApplyingDrafts(true)
+  async function applyCharacterDraft(index: number) {
+    if (!currentNovel) return
+    const draft = characterDrafts[index]
+    if (!draft?.name) return
+    if (characters.some(char => char.name === draft.name)) {
+      message.info('这个角色已经在库里了')
+      setCharacterDrafts(prev => prev.filter((_, itemIndex) => itemIndex !== index))
+      return
+    }
+    setApplyingDraftName(draft.name)
     try {
-      for (const draft of characterDrafts) {
-        if (characters.some(char => char.name === draft.name)) continue
-        await api.characters.create(currentNovel.id, {
-          name: draft.name,
-          aliases: draft.aliases || [],
-          role: draft.role || '未知',
-          importance: draft.importance || 3,
-          gender: draft.gender || undefined,
-          status: draft.status || 'alive',
-          race: draft.race || undefined,
-          realm: draft.realm || undefined,
-          faction: draft.faction || undefined,
-          appearance: draft.appearance || undefined,
-          personality: draft.personality || undefined,
-          background: draft.background || undefined,
-          golden_finger: draft.golden_finger || undefined,
-          motivation: draft.motivation || undefined,
-          profile_md: characterProfileFromFields(draft),
-        })
-      }
+      await api.characters.create(currentNovel.id, {
+        name: draft.name,
+        aliases: draft.aliases || [],
+        role: draft.role || '未知',
+        importance: draft.importance || 3,
+        gender: draft.gender || undefined,
+        status: draft.status || 'alive',
+        race: draft.race || undefined,
+        realm: draft.realm || undefined,
+        faction: draft.faction || undefined,
+        appearance: draft.appearance || undefined,
+        personality: draft.personality || undefined,
+        background: draft.background || undefined,
+        golden_finger: draft.golden_finger || undefined,
+        motivation: draft.motivation || undefined,
+        profile_md: characterProfileFromFields(draft),
+      })
       const latest = await api.characters.list(currentNovel.id)
       setCharacters(latest)
-      setCharacterDrafts([])
-      message.success('角色提案已入库')
+      setCharacterDrafts(prev => prev.filter((_, itemIndex) => itemIndex !== index))
+      message.success(`「${draft.name}」已入库`)
     } catch (err: any) {
       message.error(err?.response?.data?.detail || '角色入库失败')
     } finally {
-      setApplyingDrafts(false)
+      setApplyingDraftName(null)
     }
   }
 
@@ -313,12 +340,18 @@ export default function CharactersPage() {
       <Modal
         title={editing ? '编辑角色档案' : '新建角色档案'}
         open={open}
-        onCancel={() => setOpen(false)}
-        onOk={() => form.submit()}
-        okText="保存"
-        cancelText="取消"
+        onCancel={closeEditor}
+        footer={[
+          <Button key="cancel" onClick={closeEditor}>
+            取消
+          </Button>,
+          <Button key="submit" type="primary" onClick={() => form.submit()}>
+            保存
+          </Button>,
+        ]}
         width={820}
-        destroyOnClose
+        destroyOnHidden
+        forceRender
       >
         <Form form={form} layout="vertical" onFinish={handleSubmit}>
           <div className={styles.formGrid}>
@@ -431,20 +464,17 @@ export default function CharactersPage() {
       <Modal
         title="AI 角色提案"
         open={characterDrafts.length > 0}
-        onCancel={() => setCharacterDrafts([])}
+        onCancel={closeCharacterDrafts}
         width={860}
-        destroyOnClose
+        destroyOnHidden
         footer={[
-          <Button key="cancel" onClick={() => setCharacterDrafts([])}>
+          <Button key="cancel" onClick={closeCharacterDrafts}>
             先不入库
-          </Button>,
-          <Button key="apply" type="primary" loading={applyingDrafts} onClick={applyCharacterDrafts}>
-            全部确认入库
           </Button>,
         ]}
       >
         <div className={styles.proposalIntro}>
-          AI 只生成提案，不会直接改角色库。确认后才会写入，后续我们可以继续升级成逐条采纳、逐字段对比。
+          AI 只生成提案，不会直接改角色库。每张角色卡都需要单独确认，避免一次性误改整组角色。
         </div>
         <div className={styles.proposalList}>
           {characterDrafts.map((draft, index) => (
@@ -464,6 +494,14 @@ export default function CharactersPage() {
                   >
                     移除
                   </Button>
+                  <Button
+                    size="small"
+                    type="primary"
+                    loading={applyingDraftName === draft.name}
+                    onClick={() => applyCharacterDraft(index)}
+                  >
+                    确认这个角色
+                  </Button>
                 </div>
               </div>
               {(draft.aliases || []).length ? (
@@ -482,12 +520,13 @@ export default function CharactersPage() {
       <Modal
         title={`补记「${editing?.name || ''}」变化`}
         open={eventOpen}
-        onCancel={() => setEventOpen(false)}
+        onCancel={closeEventEditor}
         onOk={() => eventForm.submit()}
         okText="确认补记"
         cancelText="取消"
         width={720}
-        destroyOnClose
+        destroyOnHidden
+        forceRender
       >
         <div className={styles.proposalIntro}>
           这里处理 AI 漏记或后期回溯修正。不会删除旧事实，只会追加一个从第几章开始生效的状态节点。
@@ -545,7 +584,13 @@ function CharCard({ char, onEdit, onDelete }: {
           <Tooltip title="编辑档案">
             <Button type="text" size="small" icon={<EditOutlined />} onClick={() => onEdit(char)} />
           </Tooltip>
-          <Popconfirm title="确认删除？" onConfirm={() => onDelete(char)} okText="删除" cancelText="取消">
+          <Popconfirm
+            title="确认移除？"
+            description="如果角色已经出现在正文、事件或关系网里，系统会停用保留，不会硬删除。"
+            onConfirm={() => onDelete(char)}
+            okText="确认"
+            cancelText="取消"
+          >
             <Button type="text" size="small" danger icon={<DeleteOutlined />} />
           </Popconfirm>
         </div>

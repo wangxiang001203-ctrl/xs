@@ -92,14 +92,6 @@ export default function LeftNav() {
     }
   }
 
-  function canOpenChapterContent(chapter: Chapter) {
-    if (chapter.chapter_number <= 1) return true
-    const previous = [...chapters]
-      .filter(item => item.chapter_number < chapter.chapter_number)
-      .sort((a, b) => b.chapter_number - a.chapter_number)[0]
-    return previous ? previous.final_approved : true
-  }
-
   async function saveModelConfig(nextProviderId: string, nextModelId: string) {
     if (!workflowConfig) return
     const previous = workflowConfig
@@ -148,30 +140,27 @@ export default function LeftNav() {
       message.warning('请先确认大纲')
       return
     }
-    const chapterStarted = Boolean(chapter.word_count || chapter.final_approved || chapter.status !== 'draft')
     const activeVolume = chapter.volume_id ? volumes.find(volume => volume.id === chapter.volume_id) || null : null
-    if (!activeVolume && !chapterStarted) {
+    if (!activeVolume) {
       message.warning('请先在分卷细纲中规划这一章，再进入正文写作')
       return
     }
-    if (activeVolume && activeVolume.review_status !== 'approved' && !chapterStarted) {
-      message.warning('本卷细纲尚未审批，暂时不能进入正文写作')
+    if (!isBookPlanApproved(activeVolume)) {
+      message.warning('本书卷级规划尚未审批，请先到"全书分卷"审批')
       return
     }
-    if (!chapterStarted) {
-      try {
-        const synopsis = await api.chapters.getSynopsis(currentNovel.id, chapter.id)
-        if (!synopsis.content_md?.trim() || synopsis.review_status !== 'approved') {
-          message.warning('本章细纲尚未确认，请先从分卷细纲页处理')
-          return
-        }
-      } catch {
-        message.warning('本章还没有细纲，请先从分卷细纲页生成')
+    if (activeVolume.review_status !== 'approved') {
+      message.warning('本卷章节细纲尚未整卷审批，正文入口暂不开放')
+      return
+    }
+    try {
+      const synopsis = await api.chapters.getSynopsis(currentNovel.id, chapter.id)
+      if (!synopsis.content_md?.trim() || synopsis.review_status !== 'approved') {
+        message.warning('本章细纲尚未审批，请先回到本卷页面审批整卷细纲')
         return
       }
-    }
-    if (!canOpenChapterContent(chapter)) {
-      message.warning('上一章尚未人工定稿，暂时不能进入这一章正文')
+    } catch {
+      message.warning('本章还没有细纲，请先从分卷细纲页生成')
       return
     }
     const nextChapter = activeVolume ? { ...chapter, volume_id: activeVolume.id } : chapter
@@ -236,6 +225,13 @@ export default function LeftNav() {
     setTitleModalOpen(true)
   }
 
+  function closeTitleModal() {
+    setTitleModalOpen(false)
+    setTitlePrompt('')
+    setTitleOptions([])
+    setSelectedTitle('')
+  }
+
   async function generateTitles() {
     if (!currentNovel) return
     setGeneratingTitles(true)
@@ -261,9 +257,7 @@ export default function LeftNav() {
     try {
       const updated = await api.novels.update(currentNovel.id, { title: selectedTitle })
       setCurrentNovel(updated)
-      setTitleModalOpen(false)
-      setTitleOptions([])
-      setSelectedTitle('')
+      closeTitleModal()
       message.success('书名已替换')
     } catch {
       message.error('书名更新失败')
@@ -379,7 +373,7 @@ export default function LeftNav() {
           <div className={styles.sectionTitle}>通用设定</div>
           <NavItem
             icon={<UserOutlined />}
-            label="角色"
+            label="角色库"
             active={currentView === 'characters'}
             disabled={!outlineConfirmed}
             onClick={() => { openTab({ type: 'characters', novelSnapshot: currentNovel }); setCurrentChapter(null) }}
@@ -391,36 +385,48 @@ export default function LeftNav() {
             disabled={!outlineConfirmed}
             onClick={openRelationshipNetwork}
           />
-          {WORLD_SETTING_NAV.map(item => (
-            <NavItem
-              key={item.id}
-              icon={item.icon}
-              label={item.label}
-              active={currentView === 'worldbuilding' && activeWorldbuildingSectionId === item.id}
-              disabled={!outlineConfirmed}
-              onClick={() => openWorldSetting(item.id, item.label)}
-            />
-          ))}
+          <NavItem
+            icon={<GlobalOutlined />}
+            label="世界观"
+            active={currentView === 'worldbuilding' && activeWorldbuildingSectionId === 'overview'}
+            disabled={!outlineConfirmed}
+            onClick={() => openWorldSetting('overview', '世界总述')}
+          />
 
-          <div className={styles.chapterHeader}>
-            <span>自定义设定</span>
-            <Tooltip title="新建设定文件">
-              <Button type="text" size="small" icon={<PlusOutlined />} disabled={!outlineConfirmed} onClick={createCustomSetting} />
-            </Tooltip>
+          <div className={styles.sectionSubGroup}>
+            {WORLD_SETTING_NAV.filter(item => item.id !== 'overview').map(item => (
+              <NavItem
+                key={item.id}
+                icon={item.icon}
+                label={item.label}
+                active={currentView === 'worldbuilding' && activeWorldbuildingSectionId === item.id}
+                disabled={!outlineConfirmed}
+                onClick={() => openWorldSetting(item.id, item.label)}
+              />
+            ))}
           </div>
-          {customSections.length === 0 ? (
-            <div className={styles.emptyTreeHint}>{outlineConfirmed ? '暂无自定义设定。可以新增灵兽、秘境规则、职业体系等。' : '确认大纲后解锁自定义设定。'}</div>
-          ) : null}
-          {customSections.map(section => (
-            <NavItem
-              key={section.id}
-              icon={<FileTextOutlined />}
-              label={section.name || '未命名设定'}
-              active={currentView === 'worldbuilding' && activeWorldbuildingSectionId === section.id}
-              disabled={!outlineConfirmed}
-              onClick={() => openWorldSetting(section.id || 'overview', section.name || '自定义设定')}
-            />
-          ))}
+
+          {/* 自定义设定折叠在世界观下 */}
+          {customSections.length > 0 && (
+            <div className={styles.sectionSubGroup}>
+              <div className={styles.customSectionHeader}>
+                <span className={styles.customSectionLabel}>自定义</span>
+                <Tooltip title="新建设定">
+                  <Button type="text" size="small" icon={<PlusOutlined />} disabled={!outlineConfirmed} onClick={createCustomSetting} />
+                </Tooltip>
+              </div>
+              {customSections.map(section => (
+                <NavItem
+                  key={section.id}
+                  icon={<FileTextOutlined />}
+                  label={section.name || '未命名'}
+                  active={currentView === 'worldbuilding' && activeWorldbuildingSectionId === section.id}
+                  disabled={!outlineConfirmed}
+                  onClick={() => openWorldSetting(section.id || 'overview', section.name || '自定义')}
+                />
+              ))}
+            </div>
+          )}
 
           {/* 正文卷树 */}
           <div className={styles.chapterSection}>
@@ -436,18 +442,18 @@ export default function LeftNav() {
               const volumeChapters = chaptersByVolume.get(vol.id) || []
               const volumeApproved = vol.review_status === 'approved'
               const volumeBookApproved = isBookPlanApproved(vol)
-              const statusText = !volumeBookApproved ? '全书待批' : volumeApproved ? '可写' : vol.synopsis_generated ? '细纲待批' : '待细纲'
+              const statusText = !volumeBookApproved ? '全书待批' : volumeApproved ? '可写' : '待细纲审批'
               return (
                 <div key={vol.id} className={styles.volumeGroup}>
                   <div className={`${styles.volumeHeader} ${currentView === 'volume' && currentVolume?.id === vol.id ? styles.activeVolumeHeader : ''}`} onClick={() => openVolumeDetail(vol)}>
                     <FolderOutlined className={styles.volumeToggle} />
                     <span className={styles.volumeTitle}>第{vol.volume_number}卷 {vol.title}</span>
-                    <span className={`${styles.itemTag} ${volumeBookApproved && volumeApproved ? styles.tagSuccess : styles.tagWarning}`}>
+                    <span className={`${styles.itemTag} ${volumeBookApproved ? styles.tagSuccess : styles.tagWarning}`}>
                       {statusText}
                     </span>
                   </div>
                   {bookPlanApproved && !volumeApproved ? (
-                    <div className={styles.emptyTreeHint}>打开本卷，生成并审批整卷章节细纲。</div>
+                    <div className={styles.emptyTreeHint}>打开本卷，生成并审批整卷章节细纲后，正文入口才会出现。</div>
                   ) : null}
                   {bookPlanApproved && volumeApproved ? volumeChapters.map(ch => (
                     <ChapterContentItem
@@ -468,9 +474,9 @@ export default function LeftNav() {
       <Modal
         title="重新生成书名"
         open={titleModalOpen}
-        onCancel={() => setTitleModalOpen(false)}
+        onCancel={closeTitleModal}
         footer={null}
-        destroyOnClose
+        destroyOnHidden
       >
         <div className={styles.titleModalBody}>
           <Input.TextArea

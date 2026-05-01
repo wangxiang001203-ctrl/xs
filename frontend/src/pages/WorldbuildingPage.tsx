@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Empty, Input, message, Modal, Radio, Select } from 'antd'
+import { Button, Empty, Input, message, Modal, Radio, Select, Tag } from 'antd'
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import { api } from '../api'
 import WritingToolbar from '../components/editor/WritingToolbar'
@@ -142,6 +142,20 @@ function newId(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`
 }
 
+function entryIsBlank(entry?: WorldbuildingEntry | null) {
+  if (!entry) return true
+  const hasAttributes = Object.values(entry.attributes || {}).some(value => String(value ?? '').trim())
+  return !entry.name?.trim()
+    && !entry.summary?.trim()
+    && !entry.details?.trim()
+    && !(entry.tags || []).length
+    && !hasAttributes
+}
+
+function entryIsArchived(entry?: WorldbuildingEntry | null) {
+  return Boolean(entry?.attributes?.status === 'archived' || (entry?.tags || []).includes('已停用'))
+}
+
 function createArchiveId() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID()
@@ -154,7 +168,7 @@ function formatSavedAt(value?: string | null) {
   return new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 }
 
-function entryToMarkdown(entry: WorldbuildingEntry) {
+function entryToMarkdown(entry: Partial<WorldbuildingEntry>) {
   const parts = [
     entry.name ? `## ${entry.name}` : '',
     entry.summary || '',
@@ -274,6 +288,7 @@ export default function WorldbuildingPage() {
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameValue, setRenameValue] = useState('')
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
+  const [generatedDraftScope, setGeneratedDraftScope] = useState<'overview' | 'file' | 'entry'>('file')
   const editorRef = useRef<NovelEditorHandle>(null)
   const userEditedRef = useRef(false)
   const docKey = currentNovel ? `worldbuilding:${currentNovel.id}` : null
@@ -464,10 +479,13 @@ export default function WorldbuildingPage() {
   function removeEntry(entryId: string) {
     if (!activeSection?.id) return
     const entry = activeEntries.find(item => item.id === entryId)
+    const hardRemove = entryIsBlank(entry) || entry?.name === '新设定'
     Modal.confirm({
-      title: `移除「${entry?.name || '未命名条目'}」？`,
-      content: '还没在正文里出现的设定可以移除；已出现过的设定后续会改成“停用/归档”，避免破坏连续性。',
-      okText: '移除',
+      title: hardRemove ? `移除「${entry?.name || '未命名条目'}」？` : `停用保留「${entry?.name || '未命名条目'}」？`,
+      content: hardRemove
+        ? '这个条目还是空白占位，可以直接移除。'
+        : '已有内容的设定条目不会硬删除，会标记为“已停用”并保留原始设定，避免破坏正文和关系网连续性。',
+      okText: hardRemove ? '移除' : '停用保留',
       cancelText: '取消',
       okButtonProps: { danger: true },
       onOk: () => {
@@ -476,11 +494,27 @@ export default function WorldbuildingPage() {
           ...prev,
           sections: (prev.sections || []).map(section =>
             section.id === activeSection.id
-              ? { ...section, entries: (section.entries || []).filter(item => item.id !== entryId) }
+              ? {
+                  ...section,
+                  entries: hardRemove
+                    ? (section.entries || []).filter(item => item.id !== entryId)
+                    : (section.entries || []).map(item => item.id === entryId
+                        ? {
+                            ...item,
+                            tags: Array.from(new Set([...(item.tags || []), '已停用'])),
+                            attributes: {
+                              ...(item.attributes || {}),
+                              status: 'archived',
+                              archived_at: new Date().toISOString(),
+                            },
+                            details: `${item.details || ''}\n\n## 停用记录\n作者尝试移除该设定，系统已停用保留，避免破坏连续性。`.trim(),
+                          }
+                        : item),
+                }
               : section,
           ),
         }))
-        if (selectedEntryId === entryId) {
+        if (hardRemove && selectedEntryId === entryId) {
           const next = activeEntries.find(item => item.id !== entryId)
           setSelectedEntryId(next?.id || null)
         }
@@ -513,7 +547,32 @@ export default function WorldbuildingPage() {
         section.id === activeSection.id ? { ...section, name: nextName } : section,
       ),
     }))
+    closeRenameDialog()
+  }
+
+  function closeGeneratedDraft() {
+    setGeneratedDraft(null)
+    setGeneratedDraftScope('file')
+  }
+
+  function closeRenameDialog() {
     setRenameOpen(false)
+    setRenameValue('')
+  }
+
+  function closeArchivePanel() {
+    setArchiveOpen(false)
+    setSelectedArchiveId(null)
+  }
+
+  function closeSaveArchiveDialog() {
+    setSaveArchiveOpen(false)
+    setArchiveNote('')
+  }
+
+  function closeCoverDialog() {
+    setCoverOpen(false)
+    setCoverMode('archive')
   }
 
   function removeSection(sectionId: string) {
@@ -535,13 +594,28 @@ export default function WorldbuildingPage() {
     })
   }
 
+  function shouldLockSelectedEntry(extraInstruction?: string) {
+    if (!selectedEntry || !activeSection) return false
+    const text = extraInstruction || ''
+    if (/(新增|新建|创建|添加|加一个|再加|补一个|新增条目|创建条目)/.test(text)) return false
+    if (selectedEntry.name && text.includes(selectedEntry.name)) return true
+    if (/(当前|这个|这条|该|此|本)(条目|设定|道具|地点|势力|功法|技能|规则|资源|卡片)/.test(text)) return true
+    if (/(改成|改为|调整为|更新为|升级到|降级到|归属改|位置改|状态改)/.test(text)) return true
+    return false
+  }
+
   async function generateWorldbuilding(extraInstruction?: string) {
     if (!currentNovel) return
     try {
+      const lockSelectedEntry = shouldLockSelectedEntry(extraInstruction)
       const focusInstruction = [
         activeWorldbuildingSectionId === 'overview'
           ? '重点完善「世界总述」这份设定文件。'
           : `重点完善「${activeTitle}」这份设定文件。`,
+        '范围锁定：除非作者明确要求“全部/批量/整库”，本次只能生成当前设定文件的草稿，不要重写其他设定文件。',
+        lockSelectedEntry && selectedEntry
+          ? `当前选中条目：${selectedEntry.name || '未命名条目'}。如果用户是在修改当前条目，只能返回这个条目的更新，不要改动同分类下其他条目。\n当前条目内容：\n${entryToMarkdown(selectedEntry)}`
+          : null,
         activeReadableContent.trim() ? `当前文件内容：\n${activeReadableContent.trim()}` : '当前文件内容为空，请根据大纲和已有设定补齐。',
         extraInstruction,
         '请保持设定可扩展。地点、势力、道具、功法等必须优先返回 sections[].entries[] 结构化条目，content 只写分类备注。',
@@ -551,6 +625,7 @@ export default function WorldbuildingPage() {
         extraInstruction: focusInstruction,
         dryRun: true,
       })
+      setGeneratedDraftScope(activeWorldbuildingSectionId === 'overview' ? 'overview' : lockSelectedEntry ? 'entry' : 'file')
       setGeneratedDraft(normalizeWorldbuilding(data))
       window.dispatchEvent(new CustomEvent('mobi:worldbuilding-ai-response', {
         detail: { ok: true, message: `已生成「${activeTitle}」的设定草稿，请在主编辑区确认是否应用。` },
@@ -572,8 +647,30 @@ export default function WorldbuildingPage() {
       || null
   }
 
+  function activeGeneratedEntry(section?: WorldbuildingSection | null) {
+    if (!selectedEntry || !section) return null
+    const generatedEntries = section.entries || []
+    return generatedEntries.find(entry => entry.id && entry.id === selectedEntry.id)
+      || generatedEntries.find(entry => entry.name && entry.name === selectedEntry.name)
+      || null
+  }
+
   function applyGeneratedDraft() {
     if (!generatedDraft) return
+    const nextSection = activeWorldbuildingSectionId === 'overview' ? null : activeGeneratedSection()
+    const nextEntry = nextSection && selectedEntry && generatedDraftScope === 'entry'
+      ? activeGeneratedEntry(nextSection)
+      : null
+
+    if (activeWorldbuildingSectionId !== 'overview' && activeSection && !nextSection) {
+      message.warning('AI 草稿里没有找到当前设定文件，已取消应用，避免误覆盖。')
+      return
+    }
+    if (activeWorldbuildingSectionId !== 'overview' && activeSection && selectedEntry && generatedDraftScope === 'entry' && !nextEntry) {
+      message.warning('AI 草稿里没有找到当前选中的设定条目，已取消应用，避免误覆盖整个分类。')
+      return
+    }
+
     const snapshotTime = new Date().toISOString()
     if (docKey) {
       const currentDraft = useAppStore.getState().documentDrafts[docKey] as WorldbuildingDraft | undefined
@@ -603,9 +700,24 @@ export default function WorldbuildingPage() {
         overview: generatedDraft.overview || prev.overview || '',
       }))
     } else if (activeSection) {
-      const nextSection = activeGeneratedSection()
-      if (!nextSection) {
-        message.warning('AI 草稿里没有找到当前设定文件，已取消应用，避免误覆盖。')
+      if (selectedEntry && generatedDraftScope === 'entry') {
+        setLocal(prev => ({
+          ...prev,
+          sections: (prev.sections || []).map(section =>
+            section.id === activeSection.id
+              ? normalizeSection({
+                  ...section,
+                  entries: (section.entries || []).map(entry =>
+                    entry.id === selectedEntry.id
+                      ? { ...entry, ...nextEntry!, id: entry.id }
+                      : entry,
+                  ),
+                })
+              : section,
+          ),
+        }))
+        closeGeneratedDraft()
+        message.success('已应用到当前设定条目，其他条目未被改动')
         return
       }
       setLocal(prev => ({
@@ -614,7 +726,7 @@ export default function WorldbuildingPage() {
           section.id === activeSection.id
             ? normalizeSection({
                 ...section,
-                ...nextSection,
+                ...nextSection!,
                 id: section.id,
                 name: section.name,
               })
@@ -622,7 +734,7 @@ export default function WorldbuildingPage() {
         ),
       }))
     }
-    setGeneratedDraft(null)
+    closeGeneratedDraft()
     message.success('已应用到当前设定文件，其他文件未被改动')
   }
 
@@ -653,8 +765,7 @@ export default function WorldbuildingPage() {
         [activeFileKey]: [nextArchive, ...archives].slice(0, MAX_ARCHIVES),
       },
     })
-    setArchiveNote('')
-    setSaveArchiveOpen(false)
+    closeSaveArchiveDialog()
     message.success(`已保存「${activeTitle}」存档 v${nextVersion}`)
   }
 
@@ -698,8 +809,8 @@ export default function WorldbuildingPage() {
         [activeFileKey]: nextArchives,
       },
     })
-    setCoverOpen(false)
-    setArchiveOpen(false)
+    closeCoverDialog()
+    closeArchivePanel()
   }
 
   if (!currentNovel) return <div className={styles.empty}>请先选择小说</div>
@@ -775,7 +886,10 @@ export default function WorldbuildingPage() {
                       onClick={() => setSelectedEntryId(entry.id || null)}
                     >
                       <strong>{entry.name || '未命名条目'}</strong>
-                      <span>{entry.summary || entry.details || '待补充设定'}</span>
+                      <span>
+                        {entryIsArchived(entry) ? '已停用 · ' : ''}
+                        {entry.summary || entry.details || '待补充设定'}
+                      </span>
                     </button>
                   ))}
                   {!activeEntries.length ? (
@@ -794,8 +908,9 @@ export default function WorldbuildingPage() {
                         placeholder="条目名称"
                         className={styles.entryNameInput}
                       />
-                      <Button danger icon={<DeleteOutlined />} onClick={() => removeEntry(selectedEntry.id || '')}>
-                        移除
+                      {entryIsArchived(selectedEntry) ? <Tag color="default">已停用</Tag> : null}
+                      <Button danger icon={<DeleteOutlined />} disabled={entryIsArchived(selectedEntry)} onClick={() => removeEntry(selectedEntry.id || '')}>
+                        {entryIsArchived(selectedEntry) ? '已停用' : '停用'}
                       </Button>
                     </div>
 
@@ -870,34 +985,52 @@ export default function WorldbuildingPage() {
       <Modal
         title="AI 世界观草稿"
         open={Boolean(generatedDraft)}
-        onCancel={() => setGeneratedDraft(null)}
+        onCancel={closeGeneratedDraft}
         onOk={applyGeneratedDraft}
         okText="应用到当前编辑态"
         cancelText="先不应用"
         width={860}
+        destroyOnHidden
       >
         <div className={styles.generatedPreview}>
-          <p>AI 生成的是草稿。应用后会进入当前编辑态并自动保存；存档只作为作家备份，不会参与 AI 上下文。</p>
-          <div className={styles.previewBlock}>
-            <strong>世界总述</strong>
-            <pre>{generatedDraft?.overview || '暂无内容'}</pre>
-          </div>
-          {(generatedDraft?.sections || []).map(section => (
-            <div key={section.id || section.name} className={styles.previewBlock}>
-              <strong>{section.name}</strong>
-              <pre>{section.content || entriesToMarkdown(section.entries)}</pre>
+          <p>AI 生成的是当前文件草稿。应用后只会进入当前编辑态，其他设定文件不会被覆盖。</p>
+          {activeWorldbuildingSectionId === 'overview' ? (
+            <div className={styles.previewBlock}>
+              <strong>世界总述</strong>
+              <pre>{generatedDraft?.overview || '暂无内容'}</pre>
             </div>
-          ))}
+          ) : activeGeneratedSection() ? (
+            <div className={styles.previewBlock}>
+              <strong>
+                {generatedDraftScope === 'entry'
+                  ? activeGeneratedEntry(activeGeneratedSection())?.name || selectedEntry?.name || activeTitle
+                  : activeGeneratedSection()?.name || activeTitle}
+              </strong>
+              <pre>
+                {generatedDraftScope === 'entry'
+                  ? activeGeneratedEntry(activeGeneratedSection())
+                    ? entryToMarkdown(activeGeneratedEntry(activeGeneratedSection()) || {})
+                    : 'AI 草稿里没有找到当前选中的设定条目，应用时会被拦截。'
+                  : activeGeneratedSection()?.content || entriesToMarkdown(activeGeneratedSection()?.entries)}
+              </pre>
+            </div>
+          ) : (
+            <div className={styles.previewBlock}>
+              <strong>{activeTitle}</strong>
+              <pre>AI 草稿里没有找到当前设定文件，应用时会被拦截。</pre>
+            </div>
+          )}
         </div>
       </Modal>
 
       <Modal
         title="重命名设定文件"
         open={renameOpen}
-        onCancel={() => setRenameOpen(false)}
+        onCancel={closeRenameDialog}
         onOk={renameActiveSection}
         okText="确认"
         cancelText="取消"
+        destroyOnHidden
       >
         <Input
           value={renameValue}
@@ -909,9 +1042,10 @@ export default function WorldbuildingPage() {
       <Modal
         title={`${activeTitle} · 存档`}
         open={archiveOpen}
-        onCancel={() => setArchiveOpen(false)}
+        onCancel={closeArchivePanel}
         footer={null}
         width={780}
+        destroyOnHidden
       >
         <div className={styles.archivePicker}>
           <span>选择存档节点</span>
@@ -937,10 +1071,11 @@ export default function WorldbuildingPage() {
       <Modal
         title={`保存「${activeTitle}」存档`}
         open={saveArchiveOpen}
-        onCancel={() => setSaveArchiveOpen(false)}
+        onCancel={closeSaveArchiveDialog}
         onOk={saveArchive}
         okText={`保存为存档 v${Math.max(0, ...archives.map(item => item.version)) + 1}`}
         cancelText="取消"
+        destroyOnHidden
       >
         <div className={styles.archiveTip}>当前设定是实时草稿，不算存档。每份设定最多保留 5 个存档节点。</div>
         <Input.TextArea
@@ -956,10 +1091,11 @@ export default function WorldbuildingPage() {
       <Modal
         title="覆盖当前设定？"
         open={coverOpen}
-        onCancel={() => setCoverOpen(false)}
+        onCancel={closeCoverDialog}
         onOk={coverCurrentWithArchive}
         okText="确认覆盖"
         cancelText="取消"
+        destroyOnHidden
       >
         <div className={styles.archiveTip}>你将用选中的存档覆盖当前正在编辑的设定文件。</div>
         <Radio.Group value={coverMode} onChange={event => setCoverMode(event.target.value)}>

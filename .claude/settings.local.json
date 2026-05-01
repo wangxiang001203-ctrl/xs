@@ -25,7 +25,9 @@
       "Bash(./backend/venv/bin/python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 --app-dir backend)",
       "Bash(curl -s http://localhost:8000/api/novels)",
       "Bash(lsof -ti:8000)",
-      "Bash(grep -E \"\\\\.py$\")"
+      "Bash(grep -E \"\\\\.py$\")",
+      "Bash(npx tsc *)",
+      "Bash(python -c ' *)"
     ]
   }
 }

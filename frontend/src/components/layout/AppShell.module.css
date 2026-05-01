@@ -74,6 +74,7 @@
 
 .main {
   height: 100%;
+  min-width: 0;
   min-height: 0;
   background: rgba(255, 255, 255, 0.32);
   overflow: hidden;
@@ -93,4 +94,81 @@
   overflow-x: hidden;
   box-shadow: var(--shadow);
   backdrop-filter: var(--glass-blur);
+}
+
+@media (max-width: 1180px) {
+  .right {
+    display: none;
+  }
+
+  .workspace {
+    gap: 10px;
+  }
+}
+
+@media (max-width: 720px) {
+  .shell {
+    padding: 8px;
+  }
+
+  .topNav {
+    height: auto;
+    min-height: 46px;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+
+  .brandSub {
+    display: none;
+  }
+
+  .topActions {
+    gap: 6px;
+  }
+
+  .topActions :global(.ant-btn) {
+    padding-inline: 8px;
+  }
+
+  .topActions :global(.ant-btn span:not(.anticon)) {
+    display: none;
+  }
+
+  .topActions :global(.ant-btn .anticon) {
+    display: inline-flex;
+    color: var(--text-secondary);
+    font-size: 14px;
+  }
+
+  .sider {
+    flex: 0 0 204px !important;
+    width: 204px !important;
+    min-width: 204px !important;
+    max-width: 204px !important;
+    border-radius: 18px;
+  }
+
+  .main {
+    border-radius: 18px;
+  }
+}
+
+@media (max-width: 520px) {
+  .workspace {
+    flex-direction: column;
+    overflow: auto;
+  }
+
+  .sider {
+    flex: 0 0 auto !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    max-height: 44vh;
+  }
+
+  .main {
+    min-height: 56vh;
+    flex: 1 0 56vh;
+  }
 }

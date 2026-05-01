@@ -11,6 +11,7 @@ import {
   RightOutlined,
   SendOutlined,
   SafetyCertificateOutlined,
+  UnorderedListOutlined,
 } from '@ant-design/icons'
 
 import { api } from '../../api'
@@ -20,12 +21,16 @@ import type {
   AssistantContextFile,
   AssistantQuestion,
   AssistantWorkflowStep,
+  Chapter,
+  ChapterMemory,
   EntityProposal,
+  NovelGlobalState,
   Outline,
   OutlineChatMessage,
   PromptSnippet,
+  Volume,
 } from '../../types'
-import styles from './RightPanel.module.css'
+import styles from './SettingsAI.module.css'
 
 type AgentRole = 'user' | 'assistant' | 'system'
 
@@ -56,7 +61,14 @@ interface ClarifySession {
   currentIndex: number
 }
 
-const OUTLINE_INPUT_HINT = '先说说你想写什么类型的小说，比如“玄幻修仙，废柴主角逆袭，目标百万字，主线是复仇和登仙”。'
+interface MemoryContext {
+  globalState: NovelGlobalState | null
+  recentMemories: ChapterMemory[]
+  currentChapterMemory: ChapterMemory | null
+  loading: boolean
+}
+
+const OUTLINE_INPUT_HINT = '先说说你想写什么类型的小说，比如”玄幻修仙，废柴主角逆袭，目标百万字，主线是复仇和登仙”。'
 
 function createMessage(role: AgentRole, content: string, metadata?: AgentMessage['metadata']): AgentMessage {
   return {
@@ -120,6 +132,7 @@ function getContextType(currentView: string) {
   if (currentView === 'worldbuilding') return 'worldbuilding'
   if (currentView === 'novel_synopsis' || currentView === 'synopsis') return 'synopsis'
   if (currentView === 'volume') return 'volume'
+  if (currentView === 'chapter') return 'chapter'
   return 'outline'
 }
 
@@ -128,6 +141,10 @@ function buildPageTitle(currentView: string, hasOutline: boolean) {
   if (currentView === 'novel_synopsis' || currentView === 'synopsis') return '简介助手'
   if (currentView === 'worldbuilding') return '设定助手'
   if (currentView === 'characters') return '角色助手'
+  if (currentView === 'book_volumes') return '分卷助手'
+  if (currentView === 'volume') return '卷纲助手'
+  if (currentView === 'chapter') return '正文助手'
+  if (currentView === 'relationship_network') return '关系网助手'
   return 'AI 助手'
 }
 
@@ -146,10 +163,40 @@ function buildPlaceholder(currentView: string, hasOutline: boolean) {
   if (currentView === 'characters') {
     return '例如：检查主角关系网，补一条女主与反派的旧怨。'
   }
+  if (currentView === 'book_volumes') {
+    return '例如：根据大纲重排全书分卷，让每卷目标、主线、钩子更清楚。'
+  }
+  if (currentView === 'volume') {
+    return '例如：补齐本卷全部章节细纲，检查每章开头、发展、结尾是否连贯。'
+  }
+  if (currentView === 'chapter') {
+    return '例如：参考本章细纲写正文草稿，或检查正文是否违反角色状态和道具归属。'
+  }
+  if (currentView === 'relationship_network') {
+    return '例如：从主角出发检查人物、道具、地点之间还缺哪些关系。'
+  }
   return '告诉 AI 你想查资料、补设定、生成草稿还是检查连续性。'
 }
 
-function buildCurrentFileMeta(currentView: string, activeWorldbuildingSectionId?: string | null, contentPreview?: string) {
+function chapterLabel(chapter?: Chapter | null) {
+  if (!chapter) return '当前章节'
+  return chapter.title && chapter.title !== `第${chapter.chapter_number}章`
+    ? `第${chapter.chapter_number}章 ${chapter.title}`
+    : `第${chapter.chapter_number}章`
+}
+
+function volumeLabel(volume?: Volume | null) {
+  if (!volume) return '当前分卷'
+  return `第${volume.volume_number}卷 ${volume.title}`
+}
+
+function buildCurrentFileMeta(
+  currentView: string,
+  activeWorldbuildingSectionId?: string | null,
+  contentPreview?: string,
+  currentChapter?: Chapter | null,
+  currentVolume?: Volume | null,
+) {
   const withPreview = (meta: Record<string, any>) => ({
     ...meta,
     content_preview: contentPreview ? contentPreview.slice(0, 5000) : undefined,
@@ -161,18 +208,40 @@ function buildCurrentFileMeta(currentView: string, activeWorldbuildingSectionId?
     return withPreview({ id: 'book_synopsis', label: '简介', path: 'book/synopsis.md', kind: 'synopsis' })
   }
   if (currentView === 'characters') {
-    return withPreview({ id: 'characters', label: '角色', path: 'characters/characters.json', kind: 'characters' })
+    return withPreview({ id: 'characters', label: '角色', path: 'characters/characters.json', kind: 'characters', scope: 'proposal_only' })
+  }
+  if (currentView === 'relationship_network') {
+    return withPreview({ id: 'relationships', label: '关系网', path: 'entities/relationships.json', kind: 'relationships' })
   }
   if (currentView === 'worldbuilding') {
+    const hasSection = Boolean(activeWorldbuildingSectionId && activeWorldbuildingSectionId !== 'overview')
     return withPreview({
-      id: activeWorldbuildingSectionId || 'worldbuilding',
-      label: activeWorldbuildingSectionId ? '当前设定文件' : '世界观',
-      path: activeWorldbuildingSectionId ? `world/sections/${activeWorldbuildingSectionId}.json` : 'world/worldbuilding.json',
-      kind: activeWorldbuildingSectionId ? 'worldbuilding_section' : 'worldbuilding',
+      id: hasSection ? activeWorldbuildingSectionId : 'worldbuilding',
+      label: hasSection ? '当前设定文件' : '世界总述',
+      path: hasSection ? `world/sections/${activeWorldbuildingSectionId}.json` : 'world/worldbuilding.json',
+      kind: hasSection ? 'worldbuilding_section' : 'worldbuilding',
+      scope: 'current_file_only',
     })
   }
+  if (currentView === 'book_volumes') {
+    return withPreview({ id: 'book_volumes', label: '全书分卷', path: 'volumes/book-plan.md', kind: 'book_volumes' })
+  }
   if (currentView === 'volume') {
-    return withPreview({ id: 'volume', label: '分卷细纲', path: 'volumes/current/plan.md', kind: 'volume' })
+    return withPreview({
+      id: currentVolume?.id || 'volume',
+      label: volumeLabel(currentVolume),
+      path: currentVolume ? `volumes/volume_${String(currentVolume.volume_number).padStart(2, '0')}/plan.md` : 'volumes/current/plan.md',
+      kind: 'volume',
+    })
+  }
+  if (currentView === 'chapter') {
+    return withPreview({
+      id: currentChapter?.id || 'chapter',
+      label: `${chapterLabel(currentChapter)}正文`,
+      path: currentChapter ? `chapters/chapter_${String(currentChapter.chapter_number).padStart(3, '0')}/content.md` : 'chapters/current/content.md',
+      kind: 'chapter',
+      scope: 'current_file_only',
+    })
   }
   return withPreview({ id: currentView || 'current', label: '当前文件', path: 'current', kind: currentView || 'current' })
 }
@@ -181,7 +250,13 @@ export default function SettingsAI() {
   const {
     currentNovel,
     currentView,
+    currentChapter,
+    currentVolume,
     setCurrentNovel,
+    setCurrentChapter,
+    setChapters,
+    setCharacters,
+    setWorldbuilding,
     activeWorldbuildingSectionId,
     documentDrafts,
     patchDocumentDraft,
@@ -200,11 +275,26 @@ export default function SettingsAI() {
   const [promptDesc, setPromptDesc] = useState('')
   const [promptContent, setPromptContent] = useState('')
 
+  const [memoryContext, setMemoryContext] = useState<MemoryContext>({
+    globalState: null,
+    recentMemories: [],
+    currentChapterMemory: null,
+    loading: false,
+  })
+  const [memoryPanelOpen, setMemoryPanelOpen] = useState(false)
+
   const isOutlineView = currentView === 'outline'
   const isSynopsisView = currentView === 'novel_synopsis' || currentView === 'synopsis'
   const isWorldbuildingView = currentView === 'worldbuilding'
+  const contextDraftKey = currentView === 'chapter'
+    ? currentChapter?.id || 'unknown'
+    : currentView === 'volume'
+      ? currentVolume?.id || 'unknown'
+      : isWorldbuildingView
+        ? activeWorldbuildingSectionId
+        : 'default'
   const chatDraftKey = currentNovel
-    ? `settings_ai:chat:${currentNovel.id}:${currentView}:${isWorldbuildingView ? activeWorldbuildingSectionId : 'default'}`
+    ? `settings_ai:chat:${currentNovel.id}:${currentView}:${contextDraftKey}`
     : null
 
   const title = useMemo(() => buildPageTitle(currentView, hasOutline), [currentView, hasOutline])
@@ -235,9 +325,12 @@ export default function SettingsAI() {
   }, [chatDraftKey, input, messages])
 
   useEffect(() => {
-    if (!currentNovel || !isOutlineView) return
-    void loadOutlineState()
-    void loadOutlineMessages()
+    if (!currentNovel) return
+    if (isOutlineView) {
+      void loadOutlineState()
+      void loadOutlineMessages()
+    }
+    void loadMemoryContext()
   }, [currentNovel?.id, isOutlineView])
 
   useEffect(() => {
@@ -336,6 +429,48 @@ export default function SettingsAI() {
     }
   }
 
+  async function loadMemoryContext() {
+    if (!currentNovel) return
+    setMemoryContext(prev => ({ ...prev, loading: true }))
+    try {
+      const [globalState, currentMem] = await Promise.all([
+        api.novels.globalState(currentNovel.id).catch(() => null),
+        currentChapter
+          ? api.review.getChapterMemory(currentNovel.id, currentChapter.id).catch(() => null)
+          : Promise.resolve(null),
+      ])
+
+      // 加载前3章的记忆
+      let prevMemories: ChapterMemory[] = []
+      if (currentChapter && currentChapter.chapter_number > 1) {
+        try {
+          const allChapters = await api.chapters.list(currentNovel.id)
+          const prevChapterIds = allChapters
+            .filter(c =>
+              c.volume_id === currentChapter.volume_id &&
+              c.chapter_number < currentChapter.chapter_number &&
+              c.chapter_number >= Math.max(1, currentChapter.chapter_number - 3)
+            )
+            .map(c => c.id)
+          prevMemories = (await Promise.all(
+            prevChapterIds.map(id => api.review.getChapterMemory(currentNovel.id, id).catch(() => null))
+          )).filter(Boolean) as ChapterMemory[]
+        } catch {
+          // ignore
+        }
+      }
+
+      setMemoryContext({
+        globalState,
+        recentMemories: prevMemories,
+        currentChapterMemory: currentMem,
+        loading: false,
+      })
+    } catch {
+      setMemoryContext(prev => ({ ...prev, loading: false }))
+    }
+  }
+
   function appendMessage(item: AgentMessage) {
     setMessages(prev => [...prev, item])
   }
@@ -411,15 +546,61 @@ export default function SettingsAI() {
     return ''
   }
 
+  function buildMemoryContextText(): string {
+    const parts: string[] = []
+    const { globalState, recentMemories, currentChapterMemory } = memoryContext
+
+    if (globalState) {
+      parts.push(`【全书进度】第${globalState.latest_chapter_number}章 / ${globalState.total_words.toLocaleString()}字 / 已定稿${globalState.approved_chapters}章`)
+      if (globalState.characters.length > 0) {
+        const charList = globalState.characters.slice(0, 8)
+          .map(c => `${c.name}(${c.current_realm}·${c.current_location})`)
+          .join('；')
+        parts.push(`【核心角色】${charList}`)
+      }
+      if (globalState.open_threads.length > 0) {
+        parts.push(`【待回收伏笔】${globalState.open_threads.slice(0, 5).join('；')}`)
+      }
+      if (globalState.snapshots.length > 0) {
+        const latest = globalState.snapshots[globalState.snapshots.length - 1]
+        parts.push(`【最近剧情】第${latest.start_chapter}-${latest.end_chapter}章：${latest.summary}`)
+      }
+    }
+
+    if (recentMemories.length > 0) {
+      const memText = recentMemories
+        .map(m => `第${m.chapter_number}章：${m.summary || '无摘要'} ${m.state_changes.length > 0 ? '|' + m.state_changes.join('、') : ''}`)
+        .join(' / ')
+      parts.push(`【前3章摘要】${memText}`)
+    }
+
+    if (currentChapterMemory) {
+      parts.push(`【本章记忆】${currentChapterMemory.summary || '暂无'}`)
+      if (currentChapterMemory.open_threads.length > 0) {
+        parts.push(`【本章埋下伏笔】${currentChapterMemory.open_threads.join('；')}`)
+      }
+    }
+
+    return parts.join('\n')
+  }
+
   async function runAssistant(text: string, contextType = getContextType(currentView)) {
     if (!currentNovel) throw new Error('请先选择小说')
+    const memoryCtx = buildMemoryContextText()
     return api.assistant.run({
       novel_id: currentNovel.id,
       context_type: contextType,
-      context_id: isWorldbuildingView ? activeWorldbuildingSectionId : null,
+      context_id: currentView === 'chapter'
+        ? currentChapter?.id || null
+        : currentView === 'volume'
+          ? currentVolume?.id || null
+          : isWorldbuildingView
+            ? activeWorldbuildingSectionId
+            : null,
       messages: recentHistory(),
       user_message: text,
-      current_file: buildCurrentFileMeta(currentView, activeWorldbuildingSectionId, currentDraftPreview()),
+      current_file: buildCurrentFileMeta(currentView, activeWorldbuildingSectionId, currentDraftPreview(), currentChapter, currentVolume),
+      ...(memoryCtx ? { context_files: [`memory:${memoryCtx}`] } : {}),
     })
   }
 
@@ -586,7 +767,19 @@ export default function SettingsAI() {
   function openChangedFile(file: AssistantContextFile) {
     if (!currentNovel) return
     if (file.kind === 'synopsis' || file.path.includes('synopsis')) {
+      if (file.kind === 'chapter_synopsis' || file.path.includes('/synopsis.json')) {
+        openTab({ type: 'volume', novelSnapshot: currentNovel, volumeSnapshot: currentVolume || undefined })
+        return
+      }
       openTab({ type: 'novel_synopsis', novelSnapshot: currentNovel })
+      return
+    }
+    if (file.kind === 'chapter' || file.kind === 'chapter_content' || file.path.includes('/content.md')) {
+      openTab({ type: 'chapter', novelSnapshot: currentNovel, chapterSnapshot: currentChapter || undefined })
+      return
+    }
+    if (file.kind === 'volume' || file.path.includes('volumes/')) {
+      openTab({ type: 'volume', novelSnapshot: currentNovel, volumeSnapshot: currentVolume || undefined })
       return
     }
     if (file.kind === 'characters' || file.path.includes('characters')) {
@@ -640,12 +833,39 @@ export default function SettingsAI() {
     try {
       const handler = action === 'approve' ? api.review.approveProposal : api.review.rejectProposal
       await handler(currentNovel.id, proposal.id)
+      if (action === 'approve') {
+        if (proposal.entity_type === 'character' || currentView === 'characters') {
+          const latestCharacters = await api.characters.list(currentNovel.id).catch(() => null)
+          if (latestCharacters) setCharacters(latestCharacters)
+        }
+      if (proposal.entity_type !== 'character' || currentView === 'worldbuilding') {
+        const latestWorldbuilding = await api.worldbuilding.get(currentNovel.id).catch(() => null)
+        if (latestWorldbuilding) setWorldbuilding(latestWorldbuilding)
+      }
+      if (currentChapter) {
+        const refreshedChapter = await api.chapters.get(currentNovel.id, currentChapter.id).catch(() => null)
+        if (refreshedChapter) {
+          setCurrentChapter(refreshedChapter)
+          const latestChapters = await api.chapters.list(currentNovel.id).catch(() => null)
+          if (latestChapters) setChapters(latestChapters)
+        }
+      }
+      }
       setMessages(prev => prev.map(item => ({
         ...item,
         metadata: item.metadata?.proposals
           ? {
               ...item.metadata,
-              proposals: item.metadata.proposals.filter(existing => existing.id !== proposal.id),
+              proposals: item.metadata.proposals.filter(existing => {
+                if (existing.id === proposal.id) return false
+                if (action === 'approve' && proposal.action === 'create' && existing.action === 'create') {
+                  return !(
+                    existing.entity_type === proposal.entity_type
+                    && existing.entity_name.replace(/\s+/g, '') === proposal.entity_name.replace(/\s+/g, '')
+                  )
+                }
+                return true
+              }),
             }
           : item.metadata,
       })))
@@ -972,8 +1192,129 @@ export default function SettingsAI() {
     <div className={styles.panel}>
       <div className={styles.header}>
         <span>{title}</span>
-        <Tag color="processing">Ask</Tag>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <Tag color="processing">Ask</Tag>
+          <Button
+            size="small"
+            type="text"
+            icon={<UnorderedListOutlined />}
+            onClick={() => setMemoryPanelOpen(v => !v)}
+            style={{
+              color: memoryPanelOpen ? 'var(--primary)' : 'var(--text-muted)',
+              fontSize: 13,
+            }}
+            title="记忆上下文"
+          />
+        </div>
       </div>
+
+      {memoryPanelOpen && (
+        <div className={styles.memoryPanel}>
+          {memoryContext.loading ? (
+            <div className={styles.memoryLoading}>加载中...</div>
+          ) : (
+            <>
+              {/* 全局状态摘要 */}
+              {memoryContext.globalState && (
+                <div className={styles.memorySection}>
+                  <div className={styles.memorySectionTitle}>
+                    全局状态 · {memoryContext.globalState.total_chapters}章 / {memoryContext.globalState.total_words.toLocaleString()}字
+                  </div>
+                  <div className={styles.memoryStats}>
+                    <Tag color="green">已定稿 {memoryContext.globalState.approved_chapters} 章</Tag>
+                    <Tag>写到第 {memoryContext.globalState.latest_chapter_number} 章</Tag>
+                  </div>
+                  {/* 角色状态 */}
+                  {memoryContext.globalState.characters.length > 0 && (
+                    <div className={styles.memorySubSection}>
+                      <div className={styles.memorySubTitle}>核心角色状态</div>
+                      <div className={styles.memoryTagList}>
+                        {memoryContext.globalState.characters.slice(0, 6).map(char => (
+                          <Tag key={char.character_id} color={char.status === 'alive' ? 'green' : 'default'} style={{ fontSize: 10 }}>
+                            {char.name} · {char.current_realm}
+                          </Tag>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {/* 未回收伏笔 */}
+                  {memoryContext.globalState.open_threads.length > 0 && (
+                    <div className={styles.memorySubSection}>
+                      <div className={styles.memorySubTitle}>待回收伏笔 ({memoryContext.globalState.open_threads.length})</div>
+                      <div className={styles.memoryThreadList}>
+                        {memoryContext.globalState.open_threads.slice(0, 3).map((thread, i) => (
+                          <div key={i} className={styles.memoryThread}>{thread}</div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {/* 10章聚合快照 */}
+                  {memoryContext.globalState.snapshots.length > 0 && (
+                    <div className={styles.memorySubSection}>
+                      <div className={styles.memorySubTitle}>剧情进度快照</div>
+                      {memoryContext.globalState.snapshots.slice(-2).map(snap => (
+                        <div key={snap.id} className={styles.memorySnapshot}>
+                          <div className={styles.memorySnapshotHeader}>
+                            第{snap.start_chapter}-{snap.end_chapter}章
+                          </div>
+                          <div className={styles.memorySnapshotSummary}>{snap.summary}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* 前3章记忆 */}
+              {memoryContext.recentMemories.length > 0 && (
+                <div className={styles.memorySection}>
+                  <div className={styles.memorySectionTitle}>前3章记忆</div>
+                  {memoryContext.recentMemories.map(mem => (
+                    <div key={mem.id} className={styles.memoryChapterItem}>
+                      <div className={styles.memoryChapterHeader}>第{mem.chapter_number}章</div>
+                      {mem.summary && <div className={styles.memoryChapterSummary}>{mem.summary}</div>}
+                      {mem.state_changes.length > 0 && (
+                        <div className={styles.memoryChanges}>
+                          {mem.state_changes.map((change, i) => (
+                            <Tag key={i} style={{ fontSize: 10 }}>{change}</Tag>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* 当前章记忆 */}
+              {memoryContext.currentChapterMemory && (
+                <div className={styles.memorySection}>
+                  <div className={styles.memorySectionTitle}>本章已抽取记忆</div>
+                  {memoryContext.currentChapterMemory.summary && (
+                    <div className={styles.memoryChapterSummary}>{memoryContext.currentChapterMemory.summary}</div>
+                  )}
+                  {memoryContext.currentChapterMemory.key_events.length > 0 && (
+                    <div className={styles.memorySubSection}>
+                      <div className={styles.memorySubTitle}>关键事件</div>
+                      {memoryContext.currentChapterMemory.key_events.map((evt, i) => (
+                        <div key={i} className={styles.memoryEvent}>{evt}</div>
+                      ))}
+                    </div>
+                  )}
+                  {memoryContext.currentChapterMemory.open_threads.length > 0 && (
+                    <div className={styles.memorySubSection}>
+                      <div className={styles.memorySubTitle}>本章埋下伏笔</div>
+                      {memoryContext.currentChapterMemory.open_threads.map((t, i) => (
+                        <Tag key={i} color="orange" style={{ fontSize: 10 }}>{t}</Tag>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {!memoryContext.globalState && memoryContext.recentMemories.length === 0 && !memoryContext.currentChapterMemory && (
+                <div className={styles.memoryEmpty}>暂无记忆数据，开始写章节后会逐步累积。</div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       <div className={styles.chatPane}>
         <div className={styles.chatList}>

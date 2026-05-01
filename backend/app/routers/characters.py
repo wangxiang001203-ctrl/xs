@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import Character, StoryEntity
+from app.models import Character, EntityEvent, EntityMention, EntityRelation, StoryEntity
 from app.schemas.character import CharacterCreate, CharacterUpdate, CharacterOut
 from app.services.file_service import save_characters
 from app.services.entity_service import get_or_create_entity
@@ -65,6 +65,38 @@ def _sync_character_entity(novel_id: str, char: Character, db: Session, previous
     db.flush()
 
 
+def _find_character_entity(novel_id: str, char: Character, db: Session) -> StoryEntity | None:
+    return db.query(StoryEntity).filter(
+        StoryEntity.novel_id == novel_id,
+        StoryEntity.entity_type == "character",
+        StoryEntity.name == char.name,
+    ).first()
+
+
+def _entity_has_history(novel_id: str, entity: StoryEntity | None, db: Session) -> bool:
+    if not entity:
+        return False
+    mention_exists = db.query(EntityMention.id).filter(
+        EntityMention.novel_id == novel_id,
+        EntityMention.entity_id == entity.id,
+    ).first()
+    event_exists = db.query(EntityEvent.id).filter(
+        EntityEvent.novel_id == novel_id,
+        EntityEvent.entity_id == entity.id,
+    ).first()
+    relation_exists = db.query(EntityRelation.id).filter(
+        EntityRelation.novel_id == novel_id,
+        (EntityRelation.source_entity_id == entity.id) | (EntityRelation.target_entity_id == entity.id),
+    ).first()
+    return bool(mention_exists or event_exists or relation_exists)
+
+
+def _append_profile_note(char: Character, note: str):
+    current = (char.profile_md or char.background or "").strip()
+    if note not in current:
+        char.profile_md = f"{current}\n\n{note}".strip()
+
+
 @router.get("", response_model=list[CharacterOut])
 def list_characters(novel_id: str, db: Session = Depends(get_db)):
     return db.query(Character).filter(Character.novel_id == novel_id).all()
@@ -123,7 +155,29 @@ def delete_character(novel_id: str, char_id: str, db: Session = Depends(get_db))
     ).first()
     if not char:
         raise HTTPException(404, "角色不存在")
+
+    entity = _find_character_entity(novel_id, char, db)
+    if char.first_appearance_chapter or _entity_has_history(novel_id, entity, db):
+        char.status = "unknown"
+        _append_profile_note(
+            char,
+            "## 停用记录\n作者尝试删除该角色，但它已经拥有正文出现、事件或关系记录。系统已保留角色档案，避免破坏连续性。",
+        )
+        if entity:
+            entity.status = "inactive"
+            entity.current_state = {
+                **(entity.current_state or {}),
+                "状态": "停用保留",
+                "原因": "已有正文/事件/关系记录，不能硬删除",
+            }
+        db.commit()
+        db.refresh(char)
+        _sync_characters_file(novel_id, db)
+        return {"ok": True, "archived": True, "character": CharacterOut.model_validate(char).model_dump(mode="json")}
+
+    if entity:
+        db.delete(entity)
     db.delete(char)
     db.commit()
     _sync_characters_file(novel_id, db)
-    return {"ok": True}
+    return {"ok": True, "archived": False}

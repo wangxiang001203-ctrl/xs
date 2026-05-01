@@ -6,6 +6,30 @@ from sqlalchemy.orm import Session
 from app.models import Character, Worldbuilding
 from app.services.worldbuilding_service import load_worldbuilding_document
 
+SECTION_ENTITY_BUCKETS = {
+    "power_system": "realms",
+    "items": "items",
+    "geography": "locations",
+    "factions": "factions",
+    "core_rules": "rules",
+}
+
+
+def _bucket_for_section(section: dict) -> str:
+    section_id = str(section.get("id") or "").strip()
+    if section_id in SECTION_ENTITY_BUCKETS:
+        return SECTION_ENTITY_BUCKETS[section_id]
+    section_name = str(section.get("name") or "").strip()
+    if "地点" in section_name or "地图" in section_name:
+        return "locations"
+    if "势力" in section_name or "组织" in section_name:
+        return "factions"
+    if "规则" in section_name:
+        return "rules"
+    if "境界" in section_name or "修炼" in section_name or "力量" in section_name:
+        return "realms"
+    return "items"
+
 
 def validate_synopsis_characters(
     db: Session, novel_id: str, character_names: list[str]
@@ -72,11 +96,12 @@ def collect_worldbuilding_entities(db: Session, novel_id: str) -> dict[str, set[
         section_name = str(section.get("name") or "").strip()
         if section_name:
             result["sections"].add(section_name)
+        bucket = _bucket_for_section(section)
         for entry in section.get("entries") or []:
             entry_name = str(entry.get("name") or "").strip()
             if not entry_name:
                 continue
-            result["items"].add(entry_name)
+            result[bucket].add(entry_name)
     return result
 
 

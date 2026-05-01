@@ -1,13 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Input, Space, Spin, Tag, message } from 'antd'
+import { Alert, Button, Space, Spin, Tag, message } from 'antd'
 import { CheckOutlined, FolderOpenOutlined, ThunderboltOutlined } from '@ant-design/icons'
 
 import { api } from '../api'
 import { useAppStore } from '../store'
 import type { BookVolumePlan, Volume } from '../types'
 import styles from './BookVolumesPage.module.css'
-
-const { TextArea } = Input
 
 function volumeBookPlanApproved(volume: Volume) {
   return volume.plan_data?.book_plan_status === 'approved'
@@ -22,7 +20,6 @@ export default function BookVolumesPage() {
     openTab,
   } = useAppStore()
   const [plan, setPlan] = useState<BookVolumePlan | null>(null)
-  const [extraInstruction, setExtraInstruction] = useState('')
   const [loading, setLoading] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [approving, setApproving] = useState(false)
@@ -49,7 +46,7 @@ export default function BookVolumesPage() {
     if (!currentNovel) return
     setGenerating(true)
     try {
-      const result = await api.ai.generateBookVolumes(currentNovel.id, extraInstruction.trim() || undefined)
+      const result = await api.ai.generateBookVolumes(currentNovel.id)
       const data = await api.volumes.bookPlan(currentNovel.id)
       setPlan(data)
       setVolumes(data.volumes)
@@ -116,7 +113,7 @@ export default function BookVolumesPage() {
         </div>
         <Space>
           <Button icon={<ThunderboltOutlined />} onClick={generateBookVolumes} loading={generating}>
-            AI 生成全书分卷
+            生成全书分卷
           </Button>
           <Button type="primary" icon={<CheckOutlined />} onClick={approveBookPlan} loading={approving} disabled={!visibleVolumes.length || approved}>
             审批全书分卷
@@ -131,13 +128,6 @@ export default function BookVolumesPage() {
             showIcon
             message="全书分卷只负责卷级推进。审批后，正文侧边栏会按卷展示；进入某一卷后再一次性生成并审批本卷所有章节细纲。"
             className={styles.alert}
-          />
-          <TextArea
-            value={extraInstruction}
-            onChange={event => setExtraInstruction(event.target.value)}
-            placeholder="可选：告诉 AI 分卷偏好，例如“第一卷40章，前两卷主打宗门升级，第三卷进入皇城，不要回头重刷低级地图”。"
-            autoSize={{ minRows: 4, maxRows: 8 }}
-            className={styles.instruction}
           />
           <div className={styles.planDoc}>
             {bookPlanText ? (

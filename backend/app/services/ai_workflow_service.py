@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models import AIWorkflowRun, AIWorkflowStep, Novel, Outline
+from app.models import AIWorkflowRun, AIWorkflowStep, Character, Novel, Outline
 from app.services import ai_job_service, ai_service
 from app.services.agent_contracts import IntentPlan
 from app.services.agent_memory_service import build_memory_pack
@@ -315,6 +315,29 @@ def _rule_intent(db: Session, payload: dict[str, Any]) -> dict[str, Any] | None:
             "read_files": [_outline_file("reference", "已确认大纲"), _synopsis_file("reference")],
             "write_targets": [_synopsis_file("pending")],
         }
+    if context_type == "characters" or current_kind == "characters":
+        matched_names: list[str] = []
+        for character in db.query(Character).filter(Character.novel_id == payload["novel_id"]).all():
+            names = [character.name, *(character.aliases or [])]
+            if any(name and name in normalized for name in names):
+                matched_names.append(character.name)
+        if len(set(matched_names)) == 1 and re.search(r"(修改|更新|调整|完善|改成|改为|境界|动机|势力|阵营|状态|角色信息)", normalized):
+            target = {
+                "id": _text(current_file.get("id") or "characters"),
+                "label": current_file.get("label") or "角色设定",
+                "path": current_file.get("path") or "characters/characters.json",
+                "kind": current_file.get("kind") or "characters",
+                "status": "pending",
+            }
+            return {
+                "intent": "revise_character",
+                "confidence": 0.96,
+                "needs_clarification": False,
+                "reason": f"用户要求修改单个角色「{matched_names[0]}」。",
+                "questions": [],
+                "read_files": [target],
+                "write_targets": [target],
+            }
     if re.search(
         r"(创建|新增|加|补).*(角色|人物|男主|女主|反派|男配|女配|伙伴|导师|路人|配角)|"
         r"(角色|人物|男主|女主|反派|男配|女配|伙伴|导师|路人|配角).*(创建|新增|加|补)",
@@ -360,13 +383,23 @@ def _normalize_plan(plan: dict[str, Any] | IntentPlan | None, payload: dict[str,
     current_file = payload.get("current_file")
     if isinstance(current_file, dict) and current_file.get("label"):
         file_id = _text(current_file.get("id") or current_file.get("kind") or current_file.get("path"), "current")
+        current_file_ref = {
+            "id": file_id,
+            "label": current_file.get("label") or "当前文件",
+            "path": current_file.get("path") or "current",
+            "kind": current_file.get("kind") or payload.get("context_type") or "current",
+            "status": "pending",
+        }
         if not any(item.get("id") == file_id for item in read_files if isinstance(item, dict)):
-            read_files.insert(0, {
-                "id": file_id,
-                "label": current_file.get("label") or "当前文件",
-                "path": current_file.get("path") or "current",
-                "kind": current_file.get("kind") or payload.get("context_type") or "current",
-            })
+            read_files.insert(0, {**current_file_ref, "status": "reference"})
+        message = _text(payload.get("user_message"))
+        explicit_batch = any(word in message for word in ["全部", "所有", "整库", "全库", "批量", "全书"])
+        if (
+            intent in {"revise_worldbuilding", "create_character", "revise_character"}
+            and current_file.get("scope") in {"current_file_only", "proposal_only"}
+            and not explicit_batch
+        ):
+            write_targets = [current_file_ref]
     return {
         "intent": intent,
         "confidence": float(plan.get("confidence") or 0.65),
@@ -738,8 +771,38 @@ async def _execute_outline_intent(db: Session, payload: dict[str, Any], job_id: 
     )
     if result.get("saved"):
         outline = result.get("outline") or {}
+        # 大纲保存后，分析变更影响范围
+        impact_report_text = ""
+        try:
+            from app.services.outline_linkage_service import analyze_outline_change_impact
+            # 获取旧大纲（上一个版本）
+            from app.models import Outline
+            new_outline = (
+                db.query(Outline)
+                .filter(
+                    Outline.novel_id == payload["novel_id"],
+                    Outline.version == outline.get("version", 1),
+                )
+                .order_by(Outline.created_at.desc())
+                .first()
+            )
+            old_outlines = (
+                db.query(Outline)
+                .filter(Outline.novel_id == payload["novel_id"], Outline.version < outline.get("version", 999))
+                .order_by(Outline.version.desc())
+                .first()
+            )
+            if new_outline:
+                report = analyze_outline_change_impact(db, payload["novel_id"], old_outlines, new_outline)
+                impact_report_text = "\n\n" + report.as_text()
+                pending_items = report.as_proposal_items()
+                if pending_items:
+                    ai_job_service.set_running(job_id, "大纲已保存，正在分析影响范围...")
+        except Exception:
+            impact_report_text = ""
+
         return {
-            "message": f"已生成大纲 v{outline.get('version', 1)}。如果不满意，可以继续告诉我哪里要改。",
+            "message": f"已生成大纲 v{outline.get('version', 1)}。如果不满意，可以继续告诉我哪里要改。{impact_report_text}",
             "mode": "answer",
             "outline_result": result,
             "outline": outline,
@@ -808,6 +871,8 @@ def _engine_base_context(db: Session, payload: dict[str, Any]) -> str:
         "任何写入、覆盖、新增、删除都不能直接执行，只能生成待审阅草稿或提案。",
         f"当前打开文件：{current.get('label') or payload.get('context_type') or '未知'}。",
     ]
+    if isinstance(current, dict) and current.get("scope") in {"current_file_only", "proposal_only"}:
+        lines.append("范围锁定：除非作者明确说全部/批量/整库，否则本次只处理当前文件或当前提案，不得扩散修改整套设定。")
     if latest and latest.content:
         lines.append(f"当前最新大纲 v{latest.version}（{'已确认' if latest.confirmed else '未确认'}）：\n{latest.content[:1800]}")
     else:
@@ -848,6 +913,13 @@ async def _execute_generic_intent(db: Session, payload: dict[str, Any], job_id: 
 
 重要：如果涉及改文件，只能输出待确认方案，不能说已经写入。
 """
+
+    # 注入前端传来的额外上下文（如记忆上下文）
+    extra_contexts = payload.get("context_files") or []
+    for extra in extra_contexts:
+        if isinstance(extra, str) and extra.startswith("memory:"):
+            system_prompt += f"\n\n【记忆上下文（前端注入）】\n{extra[len('memory:'):]}"
+
     messages = [
         {"role": item.get("role", "user"), "content": item.get("content", "")}
         for item in (payload.get("messages") or [])[-8:]

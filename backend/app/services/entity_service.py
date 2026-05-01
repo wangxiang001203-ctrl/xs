@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from sqlalchemy import case
 from sqlalchemy.orm import Session
 
 from app.models import Character, Chapter, EntityEvent, EntityMention, EntityRelation, StoryEntity, Worldbuilding
@@ -78,6 +79,9 @@ def get_or_create_entity(
     summary: str | None = None,
     body_md: str | None = None,
     first_appearance_chapter: int | None = None,
+    graph_role: str | None = None,
+    importance: int | None = None,
+    graph_layer: int | None = None,
 ) -> StoryEntity:
     clean_name = safe_text(name)
     entity = db.query(StoryEntity).filter(
@@ -94,8 +98,16 @@ def get_or_create_entity(
             entity.body_md = body_md
         if first_appearance_chapter and not entity.first_appearance_chapter:
             entity.first_appearance_chapter = first_appearance_chapter
+        if graph_role and (entity.graph_role or "supporting") == "supporting":
+            entity.graph_role = graph_role
+        if importance and (entity.importance or 0) < importance:
+            entity.importance = importance
+        if graph_layer is not None and (entity.graph_layer is None or graph_layer < entity.graph_layer):
+            entity.graph_layer = graph_layer
         return entity
 
+    normalized_importance = max(1, min(int(importance or 3), 5))
+    normalized_layer = graph_layer if graph_layer is not None else (0 if graph_role == "protagonist" else 1 if normalized_importance >= 4 else 2)
     entity = StoryEntity(
         novel_id=novel_id,
         entity_type=entity_type,
@@ -106,6 +118,10 @@ def get_or_create_entity(
         first_appearance_chapter=first_appearance_chapter,
         current_state={},
         status="active",
+        graph_role=graph_role or "supporting",
+        importance=normalized_importance,
+        graph_layer=max(0, int(normalized_layer)),
+        graph_position={},
     )
     db.add(entity)
     db.flush()
@@ -117,6 +133,10 @@ def bootstrap_entities_from_existing(db: Session, novel_id: str) -> int:
 
     characters = db.query(Character).filter(Character.novel_id == novel_id).all()
     for char in characters:
+        role = safe_text(char.role)
+        importance = int(getattr(char, "importance", None) or 3)
+        is_protagonist = any(key in role for key in ("主角", "男主", "女主视角")) or importance >= 5
+        graph_role = "protagonist" if is_protagonist else "core" if importance >= 4 or "女主" in role or "反派" in role else "supporting"
         get_or_create_entity(
             db,
             novel_id=novel_id,
@@ -126,6 +146,9 @@ def bootstrap_entities_from_existing(db: Session, novel_id: str) -> int:
             summary=char.motivation or char.personality,
             body_md=char.profile_md or char.background,
             first_appearance_chapter=char.first_appearance_chapter,
+            graph_role=graph_role,
+            importance=importance,
+            graph_layer=0 if graph_role == "protagonist" else 1 if graph_role == "core" else 2,
         )
 
     wb = db.query(Worldbuilding).filter(Worldbuilding.novel_id == novel_id).first()
@@ -178,6 +201,103 @@ def bootstrap_entities_from_existing(db: Session, novel_id: str) -> int:
     db.flush()
     after = db.query(StoryEntity).filter(StoryEntity.novel_id == novel_id).count()
     return max(after - before, 0)
+
+
+def get_graph_center_entity(db: Session, novel_id: str) -> StoryEntity | None:
+    """Return the protagonist hub for future star-map rendering."""
+    protagonist_character = db.query(Character).filter(
+        Character.novel_id == novel_id,
+        Character.role.in_(["主角", "男主"]),
+    ).order_by(Character.importance.desc(), Character.created_at.asc()).first()
+    if protagonist_character:
+        entity = db.query(StoryEntity).filter(
+            StoryEntity.novel_id == novel_id,
+            StoryEntity.entity_type == "character",
+            StoryEntity.name == protagonist_character.name,
+            StoryEntity.status != "deleted",
+        ).first()
+        if entity:
+            entity.graph_role = "protagonist"
+            entity.importance = max(entity.importance or 3, 5)
+            entity.graph_layer = 0
+            db.flush()
+            return entity
+
+    protagonist = db.query(StoryEntity).filter(
+        StoryEntity.novel_id == novel_id,
+        StoryEntity.entity_type == "character",
+        StoryEntity.status != "deleted",
+        StoryEntity.graph_role == "protagonist",
+    ).order_by(StoryEntity.importance.desc(), StoryEntity.created_at.asc()).first()
+    if protagonist:
+        return protagonist
+
+    return db.query(StoryEntity).filter(
+        StoryEntity.novel_id == novel_id,
+        StoryEntity.entity_type == "character",
+        StoryEntity.status != "deleted",
+    ).order_by(
+        StoryEntity.importance.desc(),
+        case((StoryEntity.first_appearance_chapter == None, 1), else_=0),  # noqa: E711
+        StoryEntity.first_appearance_chapter.asc(),
+        StoryEntity.created_at.asc(),
+    ).first()
+
+
+def ensure_protagonist_graph_links(db: Session, novel_id: str) -> tuple[StoryEntity | None, int]:
+    """Persist implicit hub links so every entity can hang from the protagonist in a 3D star map.
+
+    These edges are deliberately marked as weak system anchors. Real story
+    relations can coexist and will carry higher strength or specific types.
+    """
+    center = get_graph_center_entity(db, novel_id)
+    if not center:
+        return None, 0
+    if center.graph_role != "protagonist":
+        center.graph_role = "protagonist"
+        center.graph_layer = 0
+        center.importance = max(center.importance or 3, 5)
+
+    entities = db.query(StoryEntity).filter(
+        StoryEntity.novel_id == novel_id,
+        StoryEntity.id != center.id,
+        StoryEntity.status != "deleted",
+    ).all()
+    existing_anchor_targets = {
+        target_id for (target_id,) in db.query(EntityRelation.target_entity_id).filter(
+            EntityRelation.novel_id == novel_id,
+            EntityRelation.source_entity_id == center.id,
+            EntityRelation.relation_type == "story_anchor",
+            EntityRelation.status == "active",
+            EntityRelation.target_entity_id.isnot(None),
+        ).all()
+    }
+    created = 0
+    for entity in entities:
+        if entity.id in existing_anchor_targets:
+            continue
+        relation = EntityRelation(
+            novel_id=novel_id,
+            source_entity_id=center.id,
+            target_entity_id=entity.id,
+            target_name=entity.name,
+            relation_type="story_anchor",
+            relation_strength=0.25,
+            is_bidirectional=False,
+            confidence=1.0,
+            properties={
+                "system": True,
+                "graph_usage": "protagonist_hub",
+                "description": "用于星图兜底连通，不代表剧情强关系。",
+            },
+            evidence_text="系统根据主角中心关系网自动建立的弱连接。",
+            status="active",
+        )
+        db.add(relation)
+        existing_anchor_targets.add(entity.id)
+        created += 1
+    db.flush()
+    return center, created
 
 
 def sync_worldbuilding_entities(db: Session, novel_id: str, document: dict) -> int:

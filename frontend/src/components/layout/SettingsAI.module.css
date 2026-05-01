@@ -711,3 +711,145 @@
   color: var(--text-muted);
   font-size: 11px;
 }
+
+/* 记忆上下文面板 */
+.memoryPanel {
+  border-bottom: 1px solid var(--border);
+  padding: 10px 14px;
+  max-height: 280px;
+  overflow-y: auto;
+  background: rgba(241, 250, 248, 0.38);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.memoryLoading,
+.memoryEmpty {
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: center;
+  padding: 8px 0;
+}
+
+.memorySection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.memorySectionTitle {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  border-bottom: 1px solid rgba(47, 125, 134, 0.1);
+  padding-bottom: 3px;
+}
+
+.memoryStats {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.memorySubSection {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 6px;
+}
+
+.memorySubTitle {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.memoryTagList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.memoryThreadList {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.memoryThread {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  padding: 2px 6px;
+  background: rgba(255, 179, 71, 0.08);
+  border-radius: 6px;
+  border-left: 2px solid rgba(255, 179, 71, 0.4);
+}
+
+.memorySnapshot {
+  padding: 5px 7px;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 8px;
+  border: 1px solid rgba(47, 125, 134, 0.08);
+}
+
+.memorySnapshotHeader {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--primary);
+  margin-bottom: 3px;
+}
+
+.memorySnapshotSummary {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.memoryChapterItem {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 5px 7px;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 8px;
+  border: 1px solid rgba(47, 125, 134, 0.08);
+}
+
+.memoryChapterHeader {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--primary);
+}
+
+.memoryChapterSummary {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.memoryChanges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.memoryEvent {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  padding: 2px 6px;
+  background: rgba(47, 125, 134, 0.05);
+  border-radius: 6px;
+}

@@ -4,7 +4,6 @@ import { BookOutlined, FormOutlined, SettingOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import LeftNav from './LeftNav'
 import SettingsAI from './SettingsAI'
-import ContentAI from './ContentAI'
 import PromptManager from './PromptManager'
 import { useAppStore } from '../../store'
 import styles from './AppShell.module.css'
@@ -16,13 +15,9 @@ interface Props {
 }
 
 export default function AppShell({ children }: Props) {
-  const { currentNovel, currentView, currentChapter, setWorkspaceMode, openAdminWorkspace } = useAppStore()
+  const { currentNovel, setWorkspaceMode, openAdminWorkspace } = useAppStore()
   const navigate = useNavigate()
   const [promptManagerOpen, setPromptManagerOpen] = useState(false)
-
-  // 根据当前视图决定显示哪个AI助手
-  const isContentView = currentView === 'chapter' || currentView === 'chapter_synopsis'
-  const showContentAI = isContentView && currentChapter
 
   function backToBookshelf() {
     setWorkspaceMode('bookshelf')
@@ -67,7 +62,7 @@ export default function AppShell({ children }: Props) {
 
         {/* 右侧AI助手 */}
         <Sider width={320} className={styles.right}>
-          {showContentAI ? <ContentAI /> : <SettingsAI />}
+          <SettingsAI />
         </Sider>
       </Layout>
       <PromptManager

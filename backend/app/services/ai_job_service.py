@@ -146,23 +146,11 @@ async def collect_text(
     on_partial: Callable[[str], None] | None = None,
 ) -> str:
     set_running(job_id, progress_message)
-    accumulated = ""
-    last_saved_length = 0
     try:
-        async for chunk in ai_service.stream_generate(system_prompt, user_prompt):
-            accumulated += chunk
-            if len(accumulated) - last_saved_length >= PARTIAL_SAVE_INTERVAL:
-                update_partial(job_id, accumulated, progress_message)
-                if on_partial:
-                    on_partial(accumulated)
-                last_saved_length = len(accumulated)
-        update_partial(job_id, accumulated, progress_message)
+        text = await ai_service.generate_once(system_prompt, user_prompt)
+        update_partial(job_id, text, progress_message)
         if on_partial:
-            on_partial(accumulated)
-        return accumulated
+            on_partial(text)
+        return text
     except Exception:
-        if accumulated:
-            update_partial(job_id, accumulated, "生成中断，已保留部分结果")
-            if on_partial:
-                on_partial(accumulated)
         raise

@@ -126,6 +126,18 @@ function getParsedChapterNumbers(markdown: string) {
   return [...parseVolumePlanMarkdown(markdown).keys()].sort((a, b) => a - b)
 }
 
+function chooseVolumePlanMarkdown(workspace: VolumeWorkspace, serverMarkdown: string, draftMarkdown?: string) {
+  const cleanDraft = (draftMarkdown || '').trim()
+  if (!cleanDraft) return serverMarkdown
+  const serverChapterCount = getParsedChapterNumbers(serverMarkdown).length
+  const draftChapterCount = getParsedChapterNumbers(cleanDraft).length
+  const expectedCount = workspace.chapters.length || workspace.volume.planned_chapter_count || 0
+  if (serverChapterCount && expectedCount && serverChapterCount >= expectedCount && draftChapterCount < serverChapterCount) {
+    return serverMarkdown
+  }
+  return cleanDraft
+}
+
 function buildChapterOutlineDrafts(workspace: VolumeWorkspace, markdown: string): ChapterOutlineDraft[] {
   const parsed = parseVolumePlanMarkdown(markdown)
   return [...workspace.chapters]
@@ -210,16 +222,30 @@ export default function VolumePage() {
     if (!currentNovel || !currentVolume) return
     setLoading(true)
     try {
-      const data = await api.volumes.workspace(currentNovel.id, currentVolume.id)
-      const nextMarkdown = draftPlan ?? data.volume_synopsis_markdown ?? data.volume.plan_markdown ?? ''
-      setWorkspace(data)
-      setPlanMarkdown(nextMarkdown)
-      setChapterOutlines(buildChapterOutlineDrafts(data, nextMarkdown))
+      await reloadVolumeState(draftPlan)
     } catch (err: any) {
       message.error(err?.response?.data?.detail || '分卷数据加载失败')
     } finally {
       setLoading(false)
     }
+  }
+
+  async function reloadVolumeState(draftPlan?: string) {
+    if (!currentNovel || !currentVolume) return null
+    const [workspaceData, chapterList, volumeList] = await Promise.all([
+      api.volumes.workspace(currentNovel.id, currentVolume.id),
+      api.chapters.list(currentNovel.id),
+      api.volumes.list(currentNovel.id),
+    ])
+    const serverMarkdown = workspaceData.volume_synopsis_markdown || workspaceData.volume.plan_markdown || ''
+    const nextMarkdown = chooseVolumePlanMarkdown(workspaceData, serverMarkdown, draftPlan)
+    setWorkspace(workspaceData)
+    setPlanMarkdown(nextMarkdown)
+    setChapterOutlines(buildChapterOutlineDrafts(workspaceData, nextMarkdown))
+    setChapters(chapterList)
+    setVolumes(volumeList)
+    setCurrentVolume(volumeList.find(volume => volume.id === currentVolume.id) || workspaceData.volume || currentVolume)
+    return workspaceData
   }
 
   async function savePlan() {
@@ -228,19 +254,8 @@ export default function VolumePage() {
     try {
       const updatePayload = buildPlanUpdatePayload()
       if (!updatePayload) return
-      const updated = await api.volumes.update(currentNovel.id, currentVolume.id, updatePayload.payload as any)
-      const [workspaceData, chapterList, volumeList] = await Promise.all([
-        api.volumes.workspace(currentNovel.id, currentVolume.id),
-        api.chapters.list(currentNovel.id),
-        api.volumes.list(currentNovel.id),
-      ])
-      const nextMarkdown = workspaceData.volume_synopsis_markdown || workspaceData.volume.plan_markdown || updatePayload.planMarkdown
-      setVolumes(volumeList.map(volume => (volume.id === updated.id ? updated : volume)))
-      setCurrentVolume(volumeList.find(volume => volume.id === currentVolume.id) || updated)
-      setWorkspace(workspaceData)
-      setPlanMarkdown(nextMarkdown)
-      setChapterOutlines(buildChapterOutlineDrafts(workspaceData, nextMarkdown))
-      setChapters(chapterList)
+      await api.volumes.update(currentNovel.id, currentVolume.id, updatePayload.payload as any)
+      await reloadVolumeState(updatePayload.planMarkdown)
       message.success('分卷细纲已保存，并已同步到对应章节')
     } catch (err: any) {
       message.error(err?.response?.data?.detail || err?.message || '保存失败')
@@ -254,21 +269,28 @@ export default function VolumePage() {
     setGenerating(true)
     try {
       await api.ai.generateVolumeSynopsis(currentNovel.id, currentVolume.id)
-      const [workspaceData, chapterList, volumeList] = await Promise.all([
-        api.volumes.workspace(currentNovel.id, currentVolume.id),
-        api.chapters.list(currentNovel.id),
-        api.volumes.list(currentNovel.id),
-      ])
-      const nextMarkdown = workspaceData.volume_synopsis_markdown || workspaceData.volume.plan_markdown || ''
-      setWorkspace(workspaceData)
-      setPlanMarkdown(nextMarkdown)
-      setChapterOutlines(buildChapterOutlineDrafts(workspaceData, nextMarkdown))
-      setChapters(chapterList)
-      setVolumes(volumeList)
-      setCurrentVolume(volumeList.find(volume => volume.id === currentVolume.id) || currentVolume)
-      message.success('本卷细纲已生成，请先审完整卷节奏再进入正文')
+      const refreshed = await reloadVolumeState()
+      const readyCount = refreshed?.chapters.filter(item => item.content_md?.trim()).length || 0
+      const expectedCount = refreshed?.chapters.length || refreshed?.volume.planned_chapter_count || 0
+      if (expectedCount && readyCount < expectedCount) {
+        message.warning(`已刷新本卷细纲，目前完成 ${readyCount}/${expectedCount} 章。请检查模型输出或调整提示后重新生成。`)
+      } else {
+        message.success('本卷全部章节细纲已生成，请先审完整卷节奏再进入正文')
+      }
     } catch (err: any) {
-      message.error(err?.response?.data?.detail || err.message || '生成失败')
+      const detail = err?.response?.data?.detail || err.message || '生成失败'
+      try {
+        const refreshed = await reloadVolumeState()
+        const readyCount = refreshed?.chapters.filter(item => item.content_md?.trim()).length || 0
+        const expectedCount = refreshed?.chapters.length || refreshed?.volume.planned_chapter_count || 0
+        if (readyCount > 0 && expectedCount) {
+          message.warning(`${detail}。已刷新已落库的 ${readyCount}/${expectedCount} 章。`)
+        } else {
+          message.error(detail)
+        }
+      } catch {
+        message.error(detail)
+      }
     } finally {
       setGenerating(false)
     }
@@ -276,6 +298,11 @@ export default function VolumePage() {
 
   async function approveVolume() {
     if (!currentNovel || !currentVolume) return
+    const blockReason = getApproveBlockReason()
+    if (blockReason) {
+      message.warning(blockReason)
+      return
+    }
     setApproving(true)
     try {
       const updatePayload = buildPlanUpdatePayload()
@@ -283,18 +310,8 @@ export default function VolumePage() {
         await api.volumes.update(currentNovel.id, currentVolume.id, updatePayload.payload as any)
       }
       const updated = await api.volumes.approve(currentNovel.id, currentVolume.id)
-      const [workspaceData, chapterList, volumeList] = await Promise.all([
-        api.volumes.workspace(currentNovel.id, currentVolume.id),
-        api.chapters.list(currentNovel.id),
-        api.volumes.list(currentNovel.id),
-      ])
-      const nextMarkdown = workspaceData.volume_synopsis_markdown || workspaceData.volume.plan_markdown || ''
-      setVolumes(volumeList.map(volume => (volume.id === updated.id ? updated : volume)))
+      await reloadVolumeState(updatePayload?.planMarkdown)
       setCurrentVolume(updated)
-      setWorkspace(workspaceData)
-      setPlanMarkdown(nextMarkdown)
-      setChapterOutlines(buildChapterOutlineDrafts(workspaceData, nextMarkdown))
-      setChapters(chapterList)
       message.success('本卷节奏已批准，可以开始逐章创作')
     } catch (err: any) {
       message.error(err?.response?.data?.detail || err?.message || '审批失败')
@@ -335,18 +352,21 @@ export default function VolumePage() {
 
   const volumeApproved = workspace?.volume.review_status === 'approved'
   const bookPlanApproved = workspace?.volume.plan_data?.book_plan_status === 'approved'
+  const expectedSynopsisCount = workspace?.chapters.length || workspace?.volume.planned_chapter_count || 0
+  const synopsisComplete = expectedSynopsisCount > 0 && synopsisReadyCount >= expectedSynopsisCount
   const orderedWorkspaceChapters = useMemo(
     () => [...(workspace?.chapters || [])].sort((a, b) => a.chapter_number - b.chapter_number),
     [workspace?.chapters],
   )
 
-  function canOpenChapterContent(chapterNumber: number) {
-    if (chapterNumber <= 1) return true
-    const previous = [...chapters]
-      .filter(item => item.chapter_number < chapterNumber)
-      .sort((a, b) => b.chapter_number - a.chapter_number)[0]
-    return previous ? previous.final_approved : true
+  function getApproveBlockReason() {
+    if (!bookPlanApproved) return '请先审批全书分卷，再审批本卷节奏'
+    if (volumeApproved) return '本卷节奏已经审批通过'
+    if (!synopsisComplete) return `本卷细纲还没有补齐：${synopsisReadyCount}/${expectedSynopsisCount || 0} 章`
+    return ''
   }
+
+  const approveBlockReason = getApproveBlockReason()
 
   function openChapterForWriting(item: VolumeWorkspace['chapters'][number]) {
     if (!currentNovel || !currentVolume) return
@@ -358,11 +378,6 @@ export default function VolumePage() {
       message.warning(`第${item.chapter_number}章细纲尚未确认，不能进入正文`)
       return
     }
-    if (!canOpenChapterContent(item.chapter_number)) {
-      message.warning('上一章尚未人工定稿，暂时不能进入这一章正文')
-      return
-    }
-
     const chapter = chapters.find(ch => ch.id === item.id)
     if (!chapter) {
       message.warning('章节列表还在同步，请稍后重试')
@@ -390,7 +405,7 @@ export default function VolumePage() {
           <div className={styles.title}>第{currentVolume.volume_number}卷 {workspace?.volume.title || currentVolume.title}</div>
           <div className={styles.meta}>
             <span>预计 {workspace?.volume.planned_chapter_count || 0} 章</span>
-            <span>细纲 {synopsisReadyCount}/{workspace?.chapters.length || workspace?.volume.planned_chapter_count || 0} 章</span>
+            <span>细纲 {synopsisReadyCount}/{expectedSynopsisCount} 章</span>
             <span>目标 {workspace?.volume.target_words || 0} 字</span>
             <Tag color={workspace?.volume.review_status === 'approved' ? 'green' : 'orange'}>
               {workspace?.volume.review_status === 'approved' ? '节奏已批准' : '待审批'}
@@ -402,7 +417,7 @@ export default function VolumePage() {
           <Button icon={<ThunderboltOutlined />} onClick={generateVolumeSynopsis} loading={generating} disabled={!bookPlanApproved}>
             生成本卷全部细纲
           </Button>
-          <Button type="primary" icon={<CheckOutlined />} onClick={approveVolume} loading={approving} disabled={!bookPlanApproved}>
+          <Button type="primary" icon={<CheckOutlined />} onClick={approveVolume} loading={approving} disabled={Boolean(approveBlockReason)} title={approveBlockReason}>
             审批本卷节奏
           </Button>
         </Space>
@@ -417,50 +432,81 @@ export default function VolumePage() {
         />
       ) : null}
 
-      {workspace?.pending_proposals?.length ? (
+      {bookPlanApproved && !volumeApproved && !synopsisComplete ? (
         <Alert
-          type="warning"
+          type="info"
           showIcon
-          message={`本卷还有 ${workspace.pending_proposals.length} 条待审阅实体提案，处理后才能通过卷节奏审批。`}
+          message={`本卷需要一次性生成并审完全部章节细纲，当前 ${synopsisReadyCount}/${expectedSynopsisCount || 0} 章。`}
           className={styles.alert}
         />
       ) : null}
 
       <div className={styles.content}>
         {!volumeApproved ? (
-          <section className={styles.editorShell}>
-            <WritingToolbar
-              title={`第${currentVolume.volume_number}卷细纲`}
-              wordCount={planMarkdown.length}
-              statusText="本地草稿会自动保留，保存后同步到章节细纲"
-              searchValue={searchValue}
-              searchCount={searchValue.trim() ? planMarkdown.split(searchValue.trim()).length - 1 : 0}
-              onSearchChange={setSearchValue}
-              onUndo={() => editorRef.current?.undo()}
-              onRedo={() => editorRef.current?.redo()}
-            />
-            <NovelEditor
-              ref={editorRef}
-              value={planMarkdown}
-              onChange={setPlanMarkdown}
-              searchValue={searchValue}
-              placeholder={`按固定格式写完整卷节奏：\n\n# 第${currentVolume.volume_number}卷 ${workspace?.volume.title || currentVolume.title}\n\n本卷概述：\n这里写本卷主线、核心矛盾、高潮和卷末钩子。\n\n第1章 章节标题\n这一章完整细纲写成一整块：本章目标、关键事件、冲突推进、爽点/转折、章末钩子。\n\n第2章 章节标题\n继续写下一章。`}
-            />
-          </section>
+          <div className={styles.planReviewLayout}>
+            <section className={styles.editorShell}>
+              <WritingToolbar
+                title={`第${currentVolume.volume_number}卷细纲`}
+                wordCount={planMarkdown.length}
+                statusText="本地草稿会自动保留，保存后同步到章节细纲"
+                searchValue={searchValue}
+                searchCount={searchValue.trim() ? planMarkdown.split(searchValue.trim()).length - 1 : 0}
+                onSearchChange={setSearchValue}
+                onUndo={() => editorRef.current?.undo()}
+                onRedo={() => editorRef.current?.redo()}
+              />
+              <NovelEditor
+                ref={editorRef}
+                value={planMarkdown}
+                onChange={setPlanMarkdown}
+                searchValue={searchValue}
+                placeholder={`按固定格式写完整卷节奏：\n\n# 第${currentVolume.volume_number}卷 ${workspace?.volume.title || currentVolume.title}\n\n本卷概述：\n这里写本卷主线、核心矛盾、高潮和卷末钩子。\n\n第1章 章节标题\n这一章完整细纲写成一整块：本章目标、关键事件、冲突推进、爽点/转折、章末钩子。\n\n第2章 章节标题\n继续写下一章。`}
+              />
+            </section>
+            <aside className={styles.outlinePreview}>
+              <div className={styles.previewHeader}>
+                <strong>章节细纲总览</strong>
+                <Tag color={synopsisReadyCount === (workspace?.chapters.length || 0) && synopsisReadyCount > 0 ? 'green' : 'orange'}>
+                  {synopsisReadyCount}/{workspace?.chapters.length || 0}
+                </Tag>
+              </div>
+              <div className={styles.previewList}>
+                {chapterOutlines.map(item => {
+                  const ready = Boolean(item.content.trim())
+                  return (
+                    <button
+                      type="button"
+                      key={item.chapterId}
+                      className={`${styles.previewItem} ${ready ? styles.ready : ''}`}
+                      onClick={() => {
+                        setSearchValue(`第${item.chapterNumber}章`)
+                      }}
+                    >
+                      <span>
+                        第{item.chapterNumber}章 {normalizeChapterTitle(item.chapterNumber, item.title)}
+                      </span>
+                      <small>{ready ? item.content.replace(/\s+/g, ' ').slice(0, 92) : '待生成本章细纲'}</small>
+                      <Tag color={ready ? 'processing' : 'orange'}>{ready ? '已生成' : '待生成'}</Tag>
+                    </button>
+                  )
+                })}
+                {!chapterOutlines.length ? <div className={styles.emptyPlan}>生成后这里会一次性列出本卷所有章节细纲。</div> : null}
+              </div>
+            </aside>
+          </div>
         ) : (
           <section className={styles.approvedShell}>
             <div className={styles.approvedHeader}>
               <div>
-                <strong>本卷已确认，按顺序写正文</strong>
-                <span>点击可写章节进入正文。上一章未人工定稿时，下一章会保持锁定。</span>
+                <strong>本卷已确认，可以逐章写正文</strong>
+                <span>所有已审批细纲都会映射为正文入口；定稿顺序由作者控制，系统只在定稿时做连续性校验。</span>
               </div>
               <Tag color="green">已锁定节奏</Tag>
             </div>
             <div className={styles.chapterRows}>
               {orderedWorkspaceChapters.map(item => {
-                const lockedByPrevious = !canOpenChapterContent(item.chapter_number)
                 const synopsisApproved = Boolean(item.content_md?.trim()) && item.synopsis_review_status === 'approved'
-                const disabled = !synopsisApproved || lockedByPrevious
+                const disabled = !synopsisApproved
                 const defaultTitle = `第${item.chapter_number}章`
                 const displayTitle = !item.title || item.title === defaultTitle ? defaultTitle : `${defaultTitle} ${item.title}`
                 return (
@@ -473,8 +519,8 @@ export default function VolumePage() {
                   >
                     <span className={styles.chapterRowTitle}>{displayTitle}</span>
                     <span className={styles.chapterRowSummary}>{item.content_preview || item.summary_line || '本章细纲已确认'}</span>
-                    <Tag color={item.final_approved ? 'green' : lockedByPrevious ? 'default' : synopsisApproved ? 'processing' : 'orange'}>
-                      {item.final_approved ? '已定稿' : lockedByPrevious ? '未解锁' : synopsisApproved ? '去写正文' : '细纲待确认'}
+                    <Tag color={item.final_approved ? 'green' : synopsisApproved ? 'processing' : 'orange'}>
+                      {item.final_approved ? '已定稿' : synopsisApproved ? '去写正文' : '细纲待确认'}
                     </Tag>
                   </button>
                 )

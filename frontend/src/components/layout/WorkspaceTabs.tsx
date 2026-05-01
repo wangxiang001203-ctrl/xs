@@ -19,8 +19,6 @@ function tabIcon(type: string) {
       return <GlobalOutlined />
     case 'volume':
       return <FolderOutlined />
-    case 'chapter_synopsis':
-      return <FileTextOutlined />
     case 'chapter':
       return <BookOutlined />
     case 'admin':
@@ -42,7 +40,7 @@ export default function WorkspaceTabs() {
     chapters,
     volumes,
   } = useAppStore()
-  const visibleTabs = openTabs.filter(tab => tab.type !== 'chapter_synopsis')
+  const visibleTabs = openTabs
   const novelIds = useMemo(() => (
     Array.from(new Set(visibleTabs.map(tab => tab.novelId).filter(Boolean) as string[]))
   ), [visibleTabs])

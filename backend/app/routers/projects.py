@@ -4,7 +4,9 @@ from app.database import get_db
 from app.models import Novel
 from app.models.worldbuilding import Worldbuilding
 from app.schemas.project import NovelCreate, NovelUpdate, NovelOut
+from app.schemas.global_state import NovelGlobalState
 from app.services.file_service import save_book_meta, save_synopsis
+from app.services.global_state_service import build_global_state
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -61,3 +63,12 @@ def delete_novel(novel_id: str, db: Session = Depends(get_db)):
     db.delete(novel)
     db.commit()
     return {"ok": True}
+
+
+@router.get("/{novel_id}/global-state", response_model=NovelGlobalState)
+def get_global_state(novel_id: str, db: Session = Depends(get_db)):
+    """三层记忆架构 L2：全局知识索引。包含全书进度、角色状态、道具流转、地点状态、事件时间线和伏笔追踪。"""
+    novel = db.query(Novel).filter(Novel.id == novel_id).first()
+    if not novel:
+        raise HTTPException(404, "小说不存在")
+    return build_global_state(db, novel_id)

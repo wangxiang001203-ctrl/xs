@@ -329,6 +329,25 @@
   opacity: 1;
 }
 
+.sectionSubGroup {
+  padding-left: 8px;
+  margin-bottom: 4px;
+}
+
+.customSectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px 2px;
+}
+
+.customSectionLabel {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
 .titleModalBody {
   display: flex;
   flex-direction: column;

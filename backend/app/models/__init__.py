@@ -7,16 +7,19 @@ from app.models.synopsis import Synopsis
 from app.models.ai_history import AIContextSnapshot
 from app.models.ai_job import AIGenerationJob
 from app.models.chapter_memory import ChapterMemory
+from app.models.chapter_snapshot import ChapterSnapshot
 from app.models.entity_proposal import EntityProposal
 from app.models.outline_chat import OutlineChatMessage
 from app.models.entity import StoryEntity, EntityMention, EntityEvent, EntityRelation
 from app.models.prompt_snippet import PromptSnippet
 from app.models.ai_workflow import AIWorkflowRun, AIWorkflowStep
+from app.models.book_volume_planning import BookVolumePlanning
 
 __all__ = [
     "Novel", "Outline", "Character", "Worldbuilding",
-    "Volume", "Chapter", "Synopsis", "ChapterMemory", "EntityProposal",
+    "Volume", "Chapter", "Synopsis", "ChapterMemory", "ChapterSnapshot", "EntityProposal",
     "AIContextSnapshot", "AIGenerationJob", "OutlineChatMessage",
     "StoryEntity", "EntityMention", "EntityEvent", "EntityRelation",
     "PromptSnippet", "AIWorkflowRun", "AIWorkflowStep",
+    "BookVolumePlanning",
 ]

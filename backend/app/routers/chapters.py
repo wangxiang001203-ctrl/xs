@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import Chapter, EntityProposal, Synopsis
+from app.models import Chapter, Synopsis
 from app.schemas.chapter import (
     ChapterCreate, ChapterUpdate, ChapterOut, ChapterContentOut,
     SynopsisCreate, SynopsisOut,
@@ -27,26 +27,12 @@ def list_chapters(novel_id: str, db: Session = Depends(get_db)):
 
 @router.post("", response_model=ChapterOut)
 def create_chapter(novel_id: str, data: ChapterCreate, db: Session = Depends(get_db)):
-    pending_proposal = db.query(EntityProposal).filter(
-        EntityProposal.novel_id == novel_id,
-        EntityProposal.status == "pending",
-    ).first()
-    if pending_proposal:
-        raise HTTPException(
-            400,
-            "当前作品还有待确认的 AI 角色/设定改动，请先在右侧 AI 工作详情中通过或放弃后再新建下一章。",
-        )
+    raise HTTPException(400, "正文章节不能手动创建。请先审批全书分卷，再在某一卷里生成并审批本卷章节细纲。")
 
-    exists = db.query(Chapter).filter(
-        Chapter.novel_id == novel_id, Chapter.chapter_number == data.chapter_number
-    ).first()
-    if exists:
-        raise HTTPException(400, f"第{data.chapter_number}章已存在")
-    chapter = Chapter(novel_id=novel_id, **data.model_dump())
-    db.add(chapter)
-    db.commit()
-    db.refresh(chapter)
-    return chapter
+
+@router.post("/_legacy-create", response_model=ChapterOut, include_in_schema=False)
+def legacy_create_chapter(novel_id: str, data: ChapterCreate, db: Session = Depends(get_db)):
+    raise HTTPException(410, "手动创建正文章节已停用，请通过全书分卷和本卷细纲流程生成章节。")
 
 
 @router.get("/{chapter_id}", response_model=ChapterContentOut)

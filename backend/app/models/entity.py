@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -27,6 +27,10 @@ class StoryEntity(Base):
     tags: Mapped[list | None] = mapped_column(JSON, default=list, comment="标签")
     current_state: Mapped[dict | None] = mapped_column(JSON, default=dict, comment="由事件流重算出的当前状态")
     status: Mapped[str] = mapped_column(String(24), default="active", index=True, comment="实体状态")
+    graph_role: Mapped[str] = mapped_column(String(40), default="supporting", index=True, comment="星图角色：protagonist/core/supporting/background")
+    importance: Mapped[int] = mapped_column(Integer, default=3, index=True, comment="星图重要度 1-5")
+    graph_layer: Mapped[int] = mapped_column(Integer, default=2, index=True, comment="星图层级：0核心/1主要/2常规/3背景")
+    graph_position: Mapped[dict | None] = mapped_column(JSON, default=dict, comment="星图坐标/布局元数据")
     first_appearance_chapter: Mapped[int | None] = mapped_column(Integer, comment="首次出现章节")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, comment="创建时间")
     updated_at: Mapped[datetime] = mapped_column(
@@ -103,6 +107,9 @@ class EntityRelation(Base):
     )
     target_name: Mapped[str | None] = mapped_column(String(160), comment="未入库目标名称")
     relation_type: Mapped[str] = mapped_column(String(40), index=True, comment="关系类型")
+    relation_strength: Mapped[float] = mapped_column(Float, default=1.0, index=True, comment="关系强度，用于星图边权重")
+    is_bidirectional: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否双向关系")
+    confidence: Mapped[float] = mapped_column(Float, default=1.0, comment="关系置信度")
     start_chapter: Mapped[int | None] = mapped_column(Integer, comment="关系开始章节")
     end_chapter: Mapped[int | None] = mapped_column(Integer, comment="关系结束章节")
     properties: Mapped[dict | None] = mapped_column(JSON, default=dict, comment="关系属性")

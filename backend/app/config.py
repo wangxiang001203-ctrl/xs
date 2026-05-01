@@ -13,8 +13,19 @@ BACKEND_ENV_FILE = BACKEND_DIR / ".env"
 
 class Settings(BaseSettings):
     database_url: str = "mysql+pymysql://root:@localhost:3306/novel_ai"
-    zhipu_api_key: str = ""
-    ark_api_key: str = ""
+    
+    # 国内模型 API Keys
+    ark_api_key: str = ""  # 豆包（字节跳动）
+    qwen_api_key: str = ""  # 通义千问（阿里）
+    ernie_api_key: str = ""  # 文心一言（百度）
+    zhipu_api_key: str = ""  # 智谱AI（清华）
+    
+    # 国外模型 API Keys
+    openai_api_key: str = ""  # OpenAI
+    anthropic_api_key: str = ""  # Anthropic Claude
+    google_api_key: str = ""  # Google Gemini
+    
+    # 其他配置
     ai_timeout_seconds: int = 600
     storage_path: str = "./storage/projects"
     secret_key: str = "change_this_in_production"

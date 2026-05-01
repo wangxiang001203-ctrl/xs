@@ -15,16 +15,57 @@ from app.services.review_service import (
     chapter_access_guard,
     collect_pending_proposals_for_chapter,
     mark_proposal_status,
+    resolve_duplicate_create_proposals,
     save_all_proposals,
     serialize_proposal,
 )
 from app.services.entity_service import bootstrap_entities_from_existing, scan_chapter_mentions
+from app.services.global_state_service import aggregate_snapshot
 
 router = APIRouter(prefix="/api/projects/{novel_id}/review", tags=["review"])
 
 
 class ProposalReviewBody(BaseModel):
     note: str | None = None
+
+
+def _save_final_chapter_artifacts(novel_id: str, chapter: Chapter):
+    if chapter.plot_summary:
+        append_plot_summary(novel_id, chapter.chapter_number, chapter.title or "", chapter.plot_summary)
+        save_chapter_plot_summary(novel_id, chapter.chapter_number, chapter.plot_summary)
+
+
+def _try_create_snapshot(db: Session, novel_id: str, chapter: Chapter):
+    """每10章定稿时自动触发 L1 快照聚合。"""
+    if chapter.final_approved and chapter.chapter_number % 10 == 0:
+        try:
+            aggregate_snapshot(db, novel_id, chapter.chapter_number - 9, chapter.chapter_number)
+        except Exception:
+            pass  # 快照聚合失败不影响章节定稿
+
+
+def _finalize_chapter_after_review(db: Session, novel_id: str, chapter_id: str) -> Chapter | None:
+    chapter = db.query(Chapter).filter(Chapter.id == chapter_id, Chapter.novel_id == novel_id).first()
+    if not chapter or chapter.final_approved:
+        return chapter
+
+    pending = collect_pending_proposals_for_chapter(db, novel_id, chapter_id)
+    if pending:
+        return chapter
+
+    if chapter.status != "completed":
+        return chapter
+
+    chapter.final_approved = True
+    chapter.final_approved_at = datetime.utcnow()
+    chapter.final_approval_note = "设定提案已处理，章节定稿完成。"
+    bootstrap_entities_from_existing(db, novel_id)
+    scan_chapter_mentions(db, novel_id, chapter)
+    _save_final_chapter_artifacts(novel_id, chapter)
+    _try_create_snapshot(db, novel_id, chapter)
+    db.commit()
+    db.refresh(chapter)
+    return chapter
 
 
 @router.get("/proposals")
@@ -61,8 +102,14 @@ def approve_proposal(novel_id: str, proposal_id: str, body: ProposalReviewBody, 
     if body.note:
         proposal.reason = f"{proposal.reason or ''}\n审批备注：{body.note}".strip()
     mark_proposal_status(proposal, "approved")
+    merged = resolve_duplicate_create_proposals(db, proposal)
     db.commit()
     save_all_proposals(db, novel_id)
+    if proposal.chapter_id:
+        _finalize_chapter_after_review(db, novel_id, proposal.chapter_id)
+    for duplicate in merged:
+        if duplicate.chapter_id and duplicate.chapter_id != proposal.chapter_id:
+            _finalize_chapter_after_review(db, novel_id, duplicate.chapter_id)
     return serialize_proposal(proposal)
 
 
@@ -81,6 +128,8 @@ def reject_proposal(novel_id: str, proposal_id: str, body: ProposalReviewBody, d
     mark_proposal_status(proposal, "rejected")
     db.commit()
     save_all_proposals(db, novel_id)
+    if proposal.chapter_id:
+        _finalize_chapter_after_review(db, novel_id, proposal.chapter_id)
     return serialize_proposal(proposal)
 
 
@@ -125,46 +174,27 @@ async def approve_final_chapter(novel_id: str, chapter_id: str, db: Session = De
     if not chapter.content or not chapter.content.strip():
         raise HTTPException(400, "请先完成正文")
 
+    memory = await build_chapter_memory(db, chapter, synopsis)
+
     chapter.status = "completed"
+    chapter.plot_summary = synopsis.plot_summary_update or chapter.plot_summary
+    pending_after_memory = collect_pending_proposals_for_chapter(db, novel_id, chapter_id)
+    if pending_after_memory:
+        chapter.final_approved = False
+        chapter.final_approved_at = None
+        chapter.final_approval_note = f"已生成 {len(pending_after_memory)} 条设定更新提案，处理完成后自动定稿。"
+        db.commit()
+        db.refresh(chapter)
+        return chapter
+
     chapter.final_approved = True
     chapter.final_approved_at = datetime.utcnow()
-    chapter.plot_summary = synopsis.plot_summary_update or chapter.plot_summary
-    db.commit()
-
-    # 生成章节记忆
-    memory = await build_chapter_memory(db, chapter, synopsis)
-    # 确定性实体索引兜底：不依赖 AI，按实体名/别名扫描当前定稿章节。
+    chapter.final_approval_note = "未发现待审设定提案，章节定稿完成。"
     bootstrap_entities_from_existing(db, novel_id)
     scan_chapter_mentions(db, novel_id, chapter)
+    _save_final_chapter_artifacts(novel_id, chapter)
+    _try_create_snapshot(db, novel_id, chapter)
     db.commit()
-
-    # 自动更新角色状态（定稿后触发）
-    if memory and memory.state_changes:
-        from app.services.review_service import _apply_character_updates
-        character_updates = []
-        for change in memory.state_changes:
-            # 解析状态变化，提取角色更新信息
-            # 格式示例: "张三突破到筑基期" / "李四获得法宝【玄铁剑】"
-            if isinstance(change, str):
-                # 简单解析逻辑，实际可以更复杂
-                if "突破" in change or "晋升" in change:
-                    parts = change.split("突破到")
-                    if len(parts) == 2:
-                        character_updates.append({
-                            "name": parts[0].strip(),
-                            "realm": parts[1].strip(),
-                        })
-                elif "获得" in change and ("法宝" in change or "功法" in change):
-                    # 提取角色名和物品
-                    pass  # 可以进一步实现
-
-        if character_updates:
-            _apply_character_updates(db, novel_id, chapter.chapter_number, character_updates)
-            db.commit()
-
-    if chapter.plot_summary:
-        append_plot_summary(novel_id, chapter.chapter_number, chapter.title or "", chapter.plot_summary)
-        save_chapter_plot_summary(novel_id, chapter.chapter_number, chapter.plot_summary)
     db.refresh(chapter)
     return chapter
 

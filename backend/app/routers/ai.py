@@ -50,7 +50,6 @@ from app.services.review_service import (
     chapter_access_guard,
     save_all_proposals,
     serialize_proposal,
-    validate_and_prepare_proposals,
 )
 from app.services.validator import validate_synopsis_characters
 from app.services.workflow_config_service import get_workflow_config
@@ -67,6 +66,7 @@ SYSTEM_NOVEL = "你是一位专业的玄幻/修仙小说作家，擅长构建宏
 DEFAULT_VOLUME_CHAPTER_COUNT = 12
 MAX_OUTLINE_VERSIONS = 5
 AI_JSON_REPAIR_ATTEMPTS = 3
+VOLUME_SYNOPSIS_BATCH_SIZE = 4
 VAGUE_OUTLINE_ACTION_RE = re.compile(
     r"^(?:请|麻烦)?(?:帮|给|替)?我?(?:写|生成|创建|做|弄|起草|出)(?:一下|一个|一份|个|份)?"
     r"(?:小说|故事|作品)?(?:的)?(?:大纲|故事大纲|作品大纲|小说大纲)(?:吧|呗|可以吗|行吗)?[。.!！?？]*$",
@@ -287,7 +287,7 @@ def _error_message_from_detail(detail: Any) -> str:
 def _extract_requested_character_name(text: str) -> str:
     normalized = re.sub(r"\s+", "", text or "")
     patterns = [
-        r"(?:创建|新增|加)(?:一个|一名|个)?(?:角色|人物)(?:叫|名叫|名为|名字叫|名称为)([\u4e00-\u9fa5A-Za-z0-9·]{2,16})",
+        r"(?:创建|新增|加|修改|更新|调整|完善)(?:一个|一名|个)?(?:角色|人物)?(?:叫|名叫|名为|名字叫|名称为)([\u4e00-\u9fa5A-Za-z0-9·]{2,16})",
         r"(?:角色|人物)(?:叫|名叫|名为|名字叫|名称为)([\u4e00-\u9fa5A-Za-z0-9·]{2,16})",
     ]
     for pattern in patterns:
@@ -295,6 +295,39 @@ def _extract_requested_character_name(text: str) -> str:
         if match:
             return match.group(1).strip("，。,. ")
     return ""
+
+
+def _extract_existing_character_name(db: Session, novel_id: str, text: str) -> str:
+    characters = db.query(Character).filter(Character.novel_id == novel_id).all()
+    matches = []
+    for character in characters:
+        names = [character.name, *(character.aliases or [])]
+        if any(name and name in text for name in names):
+            matches.append(character.name)
+    return matches[0] if len(set(matches)) == 1 else ""
+
+
+def _extract_patch_value(text: str, prefix: str) -> str:
+    match = re.search(prefix + r"(.+?)(?:，|,|。|；|;|\n|并|且|同时|只|$)", text)
+    return match.group(1).strip("，。,. ") if match else ""
+
+
+def _character_patch_from_text(text: str) -> dict:
+    patch: dict = {}
+    role = _role_from_text(text)
+    if role != "未知":
+        patch["role"] = role
+    realm = _extract_patch_value(text, r"(?:境界|能力|等级)(?:改成|改为|更新为|调整为|变成|升到|升级到)")
+    if realm:
+        patch["realm"] = realm
+    faction = _extract_patch_value(text, r"(?:势力|阵营|组织|所属)(?:改成|改为|更新为|调整为|变成|加入)")
+    if faction:
+        patch["faction"] = faction
+    motivation = _extract_patch_value(text, r"(?:动机|目标)(?:改成|改为|更新为|调整为|变成)")
+    if motivation:
+        patch["motivation"] = motivation
+    patch["profile_note"] = text
+    return patch
 
 
 def _role_from_text(text: str) -> str:
@@ -306,11 +339,16 @@ def _role_from_text(text: str) -> str:
 
 def _chat_entity_proposal(db: Session, payload: dict) -> dict | None:
     user_message = _safe_text(payload.get("user_message"))
-    wants_character = bool(re.search(r"(创建|新增|加).*(角色|人物)|(角色|人物).*(创建|新增|加)", user_message))
+    existing_name = _extract_existing_character_name(db, payload["novel_id"], user_message)
+    wants_character = bool(re.search(
+        r"(创建|新增|加|修改|更新|调整|完善).*(角色|人物|男主|女主|反派|男配|女配|导师|伙伴|配角)|"
+        r"(角色|人物|男主|女主|反派|男配|女配|导师|伙伴|配角).*(创建|新增|加|修改|更新|调整|完善)",
+        user_message,
+    )) or bool(existing_name and re.search(r"(修改|更新|调整|完善|改成|改为|境界|动机|势力|阵营|状态|角色信息)", user_message))
     if not wants_character:
         return None
 
-    name = _extract_requested_character_name(user_message)
+    name = _extract_requested_character_name(user_message) or existing_name
     if not name:
         return {
             "message": "可以，我先确认几个角色关键信息，确认后再生成待审阅角色卡。",
@@ -337,13 +375,16 @@ def _chat_entity_proposal(db: Session, payload: dict) -> dict | None:
             Character.novel_id == payload["novel_id"],
             Character.name == name,
         ).first()
+        patch = _character_patch_from_text(user_message)
         entry = {
             "name": name,
-            "role": _role_from_text(user_message),
+            "role": patch.get("role") or _role_from_text(user_message),
             "summary": "由 AI 对话创建的待确认角色卡。",
             "details": user_message,
             "source": "assistant_chat",
         }
+        if existing_character:
+            entry = {**entry, **patch}
         proposal = EntityProposal(
             novel_id=payload["novel_id"],
             chapter_id=payload.get("chapter_id") or None,
@@ -355,14 +396,23 @@ def _chat_entity_proposal(db: Session, payload: dict) -> dict | None:
             reason="AI 根据对话识别到角色创建/更新意图，等待作者确认后才会写入角色库。",
             payload={
                 "entry": entry,
+                "patch": patch if existing_character else {},
                 "before": {
                     "name": existing_character.name,
                     "role": existing_character.role,
                     "realm": existing_character.realm,
                     "faction": existing_character.faction,
+                    "motivation": existing_character.motivation,
                     "profile_md": existing_character.profile_md,
                 } if existing_character else None,
-                "after": entry,
+                "after": {**({
+                    "name": existing_character.name,
+                    "role": existing_character.role,
+                    "realm": existing_character.realm,
+                    "faction": existing_character.faction,
+                    "motivation": existing_character.motivation,
+                    "profile_md": existing_character.profile_md,
+                } if existing_character else {}), **entry},
             },
         )
         db.add(proposal)
@@ -655,6 +705,11 @@ def _book_plan_status(volume: Volume) -> str:
     return _safe_text(plan_data.get("book_plan_status"), "draft")
 
 
+def _book_plan_approved_for_novel(db: Session, novel_id: str) -> bool:
+    volumes = db.query(Volume).filter(Volume.novel_id == novel_id).all()
+    return bool(volumes) and all(_book_plan_status(volume) == "approved" for volume in volumes)
+
+
 def _single_volume_book_plan_markdown(volume: Volume) -> str:
     plan_data = volume.plan_data or {}
     saved = _safe_text(plan_data.get("book_plan_markdown"))
@@ -882,6 +937,91 @@ def _build_volume_synopsis_markdown(db: Session, volume: Volume) -> str:
             parts.append("（待生成）")
         parts.append("")
     return "\n".join(parts).strip()
+
+
+def _chunked_numbers(numbers: list[int], size: int) -> list[list[int]]:
+    return [numbers[index:index + size] for index in range(0, len(numbers), size)]
+
+
+def _volume_synopsis_items(data: Any) -> list[dict]:
+    raw_items = data.get("chapters", []) if isinstance(data, dict) else data
+    return [item for item in raw_items if isinstance(item, dict)]
+
+
+def _synopsis_is_complete(synopsis: Synopsis | None) -> bool:
+    if not synopsis:
+        return False
+    content = _safe_text(synopsis.content_md)
+    if not content or content in {"（待生成）", "(待生成)", "待生成"}:
+        return False
+    return True
+
+
+def _persist_volume_synopsis_items(
+    db: Session,
+    *,
+    novel_id: str,
+    volume_id: str,
+    ch_map: dict[int, Chapter],
+    items: list[dict],
+    allowed_numbers: set[int],
+) -> tuple[set[int], list[EntityProposal]]:
+    accepted_numbers: set[int] = set()
+
+    for item in items:
+        ch_num = _safe_int(item.get("chapter_number"), 0)
+        ch = ch_map.get(ch_num)
+        if not ch or ch_num not in allowed_numbers:
+            continue
+
+        content_md = _safe_text(item.get("content_md"))
+        if not content_md:
+            continue
+
+        opening = item.get("opening") if isinstance(item.get("opening"), dict) else {}
+        development = item.get("development") if isinstance(item.get("development"), dict) else {}
+        ending = item.get("ending") if isinstance(item.get("ending"), dict) else {}
+        opening_characters = _safe_list(opening.get("characters"))
+        development_characters = _safe_list(development.get("characters"))
+        all_chars = list(dict.fromkeys([
+            str(name).strip()
+            for name in [*opening_characters, *development_characters]
+            if str(name).strip()
+        ]))
+        referenced_entities = item.get("referenced_entities") if isinstance(item.get("referenced_entities"), dict) else {}
+        referenced_entities = dict(referenced_entities)
+        if not referenced_entities.get("characters"):
+            referenced_entities["characters"] = all_chars
+
+        existing = db.query(Synopsis).filter(Synopsis.chapter_id == ch.id).first()
+        if not existing:
+            existing = Synopsis(chapter_id=ch.id, novel_id=novel_id)
+            db.add(existing)
+
+        existing.opening_scene = _safe_text(opening.get("scene"))
+        existing.opening_mood = _safe_text(opening.get("mood"))
+        existing.opening_hook = _safe_text(opening.get("hook"))
+        existing.opening_characters = opening_characters
+        existing.development_events = _safe_list(development.get("events"))
+        existing.development_conflicts = _safe_list(development.get("conflicts"))
+        existing.development_characters = development_characters
+        existing.ending_resolution = _safe_text(ending.get("resolution"))
+        existing.ending_cliffhanger = _safe_text(ending.get("cliffhanger"))
+        existing.ending_next_hook = _safe_text(ending.get("next_chapter_hook"))
+        existing.all_characters = all_chars
+        existing.word_count_target = _safe_int(item.get("word_count_target"), 3000)
+        existing.summary_line = _safe_text(item.get("summary_line"))
+        existing.content_md = content_md
+        existing.hard_constraints = _safe_list(item.get("hard_constraints"))
+        existing.referenced_entities = referenced_entities
+        existing.review_status = "draft"
+        existing.approved_at = None
+        existing.plot_summary_update = _safe_text(item.get("plot_summary_update"))
+        if item.get("title"):
+            ch.title = _clean_chapter_title(ch.chapter_number, item.get("title"))
+        accepted_numbers.add(ch_num)
+
+    return accepted_numbers, []
 
 
 def _combine_segment_content(base_content: str, segment: str, generated_text: str) -> str:
@@ -1278,15 +1418,8 @@ async def _execute_chapter_synopsis_job(db: Session, payload: dict, job_id: str)
     referenced_entities = data.get("referenced_entities") or {}
     if not referenced_entities.get("characters"):
         referenced_entities["characters"] = all_chars
-    proposal_candidates = data.get("proposal_candidates") or []
-    missing_entities, created_proposals = validate_and_prepare_proposals(
-        db,
-        payload["novel_id"],
-        referenced_entities,
-        proposal_candidates,
-        chapter_id=payload["chapter_id"],
-        volume_id=chapter.volume_id,
-    )
+    missing_entities: dict[str, list[str]] = {}
+    created_proposals: list[EntityProposal] = []
 
     synopsis = db.query(Synopsis).filter(Synopsis.chapter_id == payload["chapter_id"]).first()
     if not synopsis:
@@ -1309,15 +1442,13 @@ async def _execute_chapter_synopsis_job(db: Session, payload: dict, job_id: str)
     synopsis.content_md = data.get("content_md", "")
     synopsis.hard_constraints = data.get("hard_constraints") or []
     synopsis.referenced_entities = referenced_entities
-    synopsis.review_status = "needs_review" if created_proposals else "draft"
+    synopsis.review_status = "draft"
     synopsis.approved_at = None
     synopsis.plot_summary_update = data.get("plot_summary_update", "")
     db.commit()
     db.refresh(synopsis)
     save_chapter_synopsis(payload["novel_id"], chapter.chapter_number, _serialize_synopsis(synopsis))
     save_chapter_plot_summary(payload["novel_id"], chapter.chapter_number, synopsis.plot_summary_update or "")
-    if created_proposals:
-        save_all_proposals(db, payload["novel_id"])
     return {
         "status": "ok",
         "summary_line": synopsis.summary_line,
@@ -1334,6 +1465,12 @@ async def _execute_full_chapter_job(db: Session, payload: dict, job_id: str) -> 
     guard = chapter_access_guard(db, chapter)
     if not guard["ok"]:
         raise HTTPException(400, guard["reason"])
+    volume = db.query(Volume).filter(Volume.id == chapter.volume_id, Volume.novel_id == payload["novel_id"]).first()
+    if not volume or volume.review_status != "approved":
+        raise HTTPException(400, "本章所属分卷细纲尚未审批通过，不能生成正文。")
+    synopsis = db.query(Synopsis).filter(Synopsis.chapter_id == chapter.id).first()
+    if not synopsis or synopsis.review_status != "approved":
+        raise HTTPException(400, "本章细纲尚未审批通过，不能生成正文。")
 
     prompt = context_builder.build_chapter_context(db, payload["novel_id"], payload["chapter_id"])
     if payload.get("extra_instruction"):
@@ -1348,21 +1485,6 @@ async def _execute_full_chapter_job(db: Session, payload: dict, job_id: str) -> 
         on_partial=None if dry_run else lambda current: _persist_full_chapter_partial(payload["chapter_id"], current),
     )
 
-    # 提取实体引用并检测幻觉
-    synopsis = db.query(Synopsis).filter(Synopsis.chapter_id == chapter.id).first()
-    referenced_entities = synopsis.referenced_entities if synopsis and isinstance(synopsis.referenced_entities, dict) else {}
-
-    # 从生成的正文中提取实体引用（简单实现，可以后续优化为AI提取）
-    # 这里先使用细纲中的referenced_entities作为基准
-    _, proposals = validate_and_prepare_proposals(
-        db,
-        payload["novel_id"],
-        referenced_entities,
-        [],  # 正文生成时暂不自动提取新实体，依赖细纲阶段的提案
-        chapter_id=chapter.id,
-        volume_id=chapter.volume_id,
-    )
-
     if dry_run:
         return {
             "chapter_id": chapter.id,
@@ -1371,8 +1493,8 @@ async def _execute_full_chapter_job(db: Session, payload: dict, job_id: str) -> 
             "content": text,
             "word_count": len(text),
             "dry_run": True,
-            "proposals_created": len(proposals),
-            "pending_proposals": [serialize_proposal(item) for item in proposals],
+            "proposals_created": 0,
+            "pending_proposals": [],
         }
 
     chapter.content = text
@@ -1385,7 +1507,7 @@ async def _execute_full_chapter_job(db: Session, payload: dict, job_id: str) -> 
 
     return {
         **_serialize_chapter(chapter),
-        "proposals_created": len(proposals),
+        "proposals_created": 0,
     }
 
 
@@ -1548,88 +1670,147 @@ async def _execute_volume_synopsis_job(db: Session, payload: dict, job_id: str) 
     ).first()
     if not volume:
         raise HTTPException(404, "卷不存在")
+    if not _book_plan_approved_for_novel(db, payload["novel_id"]):
+        raise HTTPException(400, "请先审批全书分卷，再生成本卷章节细纲。")
 
     chapters = _ensure_volume_chapters(db, payload["novel_id"], volume)
     ch_map = {c.chapter_number: c for c in chapters}
+    synopsis_by_chapter = {
+        item.chapter_id: item
+        for item in db.query(Synopsis).filter(Synopsis.chapter_id.in_([chapter.id for chapter in chapters])).all()
+    } if chapters else {}
+    target_numbers = [
+        chapter.chapter_number
+        for chapter in chapters
+        if not _synopsis_is_complete(synopsis_by_chapter.get(chapter.id))
+    ]
+    if not target_numbers:
+        target_numbers = [chapter.chapter_number for chapter in chapters]
+
     created_proposals: list[EntityProposal] = []
+    total_count = len(chapters)
+    generated_count = 0
 
-    # 一次性生成整卷细纲（不再分批）
-    prompt = context_builder.build_volume_synopsis_context(
-        db,
-        payload["novel_id"],
-        payload["volume_id"],
-    )
-    if payload.get("extra_instruction"):
-        prompt += f"\n\n额外要求：{payload['extra_instruction']}"
+    for batch_index, batch_numbers in enumerate(_chunked_numbers(target_numbers, VOLUME_SYNOPSIS_BATCH_SIZE), start=1):
+        pending_numbers = set(batch_numbers)
+        attempts = 0
+        while pending_numbers and attempts < 3:
+            attempts += 1
+            current_numbers = sorted(pending_numbers)
+            prompt = context_builder.build_volume_synopsis_context(
+                db,
+                payload["novel_id"],
+                payload["volume_id"],
+                chapter_numbers=current_numbers,
+            )
+            prompt += (
+                "\n\n强制要求：本次只生成这些章节，且必须全部返回："
+                + "、".join(f"第{number}章" for number in current_numbers)
+                + "。不要省略，不要只返回前几章。"
+            )
+            if attempts > 1:
+                prompt += "\n上一轮缺少章节，请只补齐缺失章节，仍然输出合法 JSON 数组。"
+            if payload.get("extra_instruction"):
+                prompt += f"\n\n额外要求：{payload['extra_instruction']}"
 
-    full_text = await ai_job_service.collect_text(
-        job_id=job_id,
-        system_prompt=SYSTEM_NOVEL,
-        user_prompt=prompt,
-        progress_message=f"AI 正在生成本卷细纲（共{len(chapters)}章）...",
-    )
-    try:
-        data = await _loads_ai_json_with_retries(
-            job_id=job_id,
-            label="分卷细纲生成",
-            response_text=full_text,
-            json_contract="JSON 对象或数组。对象时必须包含 chapters 数组；数组时每个元素是一章细纲。",
-            expected_root=(dict, list),
-        )
-    except AIJsonFormatError as exc:
-        raise HTTPException(400, exc.detail)
-    synopsis_list = data.get("chapters", []) if isinstance(data, dict) else data
+            full_text = await ai_job_service.collect_text(
+                job_id=job_id,
+                system_prompt=SYSTEM_NOVEL,
+                user_prompt=prompt,
+                progress_message=f"AI 正在生成本卷细纲：第{batch_index}批（{generated_count}/{total_count}章已完成）...",
+            )
+            try:
+                data = await _loads_ai_json_with_retries(
+                    job_id=job_id,
+                    label="分卷细纲生成",
+                    response_text=full_text,
+                    json_contract="JSON 对象或数组。对象时必须包含 chapters 数组；数组时每个元素是一章细纲。",
+                    expected_root=(dict, list),
+                )
+            except AIJsonFormatError as exc:
+                raise HTTPException(400, exc.detail)
 
-    for item in synopsis_list:
-        ch_num = _safe_int(item.get("chapter_number"), 0)
-        ch = ch_map.get(ch_num)
-        if not ch:
-            continue
-        opening = item.get("opening", {})
-        development = item.get("development", {})
-        ending = item.get("ending", {})
-        all_chars = list(set(opening.get("characters", []) + development.get("characters", [])))
-        referenced_entities = item.get("referenced_entities") or {}
-        if not referenced_entities.get("characters"):
-            referenced_entities["characters"] = all_chars
-        _, proposals = validate_and_prepare_proposals(
-            db,
-            payload["novel_id"],
-            referenced_entities,
-            item.get("proposal_candidates") or [],
-            chapter_id=ch.id,
-            volume_id=payload["volume_id"],
-        )
-        created_proposals.extend(proposals)
+            accepted_numbers, proposals = _persist_volume_synopsis_items(
+                db,
+                novel_id=payload["novel_id"],
+                volume_id=payload["volume_id"],
+                ch_map=ch_map,
+                items=_volume_synopsis_items(data),
+                allowed_numbers=pending_numbers,
+            )
+            created_proposals.extend(proposals)
+            db.commit()
+            generated_count += len(accepted_numbers)
+            pending_numbers -= accepted_numbers
 
-        existing = db.query(Synopsis).filter(Synopsis.chapter_id == ch.id).first()
-        if not existing:
-            existing = Synopsis(chapter_id=ch.id, novel_id=payload["novel_id"])
-            db.add(existing)
+        if pending_numbers:
+            for missing_number in sorted(pending_numbers):
+                single_pending = {missing_number}
+                fallback_attempts = 0
+                while single_pending and fallback_attempts < 4:
+                    fallback_attempts += 1
+                    prompt = context_builder.build_volume_synopsis_context(
+                        db,
+                        payload["novel_id"],
+                        payload["volume_id"],
+                        chapter_numbers=[missing_number],
+                    )
+                    prompt += (
+                        f"\n\n兜底补齐任务：只生成第{missing_number}章，必须返回且只能返回这一章。"
+                        "不要省略，不要输出其他章节，不要输出解释。"
+                    )
+                    if payload.get("extra_instruction"):
+                        prompt += f"\n\n额外要求：{payload['extra_instruction']}"
+                    full_text = await ai_job_service.collect_text(
+                        job_id=job_id,
+                        system_prompt=SYSTEM_NOVEL,
+                        user_prompt=prompt,
+                        progress_message=f"AI 正在兜底补齐第{missing_number}章细纲...",
+                    )
+                    try:
+                        data = await _loads_ai_json_with_retries(
+                            job_id=job_id,
+                            label=f"第{missing_number}章细纲补齐",
+                            response_text=full_text,
+                            json_contract="JSON 对象或数组。对象时必须包含 chapters 数组；数组时每个元素是一章细纲。",
+                            expected_root=(dict, list),
+                        )
+                    except AIJsonFormatError as exc:
+                        if fallback_attempts >= 4:
+                            raise HTTPException(400, exc.detail)
+                        continue
+                    accepted_numbers, proposals = _persist_volume_synopsis_items(
+                        db,
+                        novel_id=payload["novel_id"],
+                        volume_id=payload["volume_id"],
+                        ch_map=ch_map,
+                        items=_volume_synopsis_items(data),
+                        allowed_numbers=single_pending,
+                    )
+                    created_proposals.extend(proposals)
+                    db.commit()
+                    generated_count += len(accepted_numbers)
+                    single_pending -= accepted_numbers
+                pending_numbers -= {missing_number} - single_pending
+            if pending_numbers:
+                missing_text = "、".join(f"第{number}章" for number in sorted(pending_numbers))
+                raise HTTPException(
+                    400,
+                    f"AI 多轮补齐后仍缺失：{missing_text}。已保留成功章节，请检查提示词或模型输出能力。",
+                )
 
-        existing.opening_scene = opening.get("scene", "")
-        existing.opening_mood = opening.get("mood", "")
-        existing.opening_hook = opening.get("hook", "")
-        existing.opening_characters = opening.get("characters", [])
-        existing.development_events = development.get("events", [])
-        existing.development_conflicts = development.get("conflicts", [])
-        existing.development_characters = development.get("characters", [])
-        existing.ending_resolution = ending.get("resolution", "")
-        existing.ending_cliffhanger = ending.get("cliffhanger", "")
-        existing.ending_next_hook = ending.get("next_chapter_hook", "")
-        existing.all_characters = all_chars
-        existing.word_count_target = item.get("word_count_target", 3000)
-        existing.summary_line = item.get("summary_line", "")
-        existing.content_md = item.get("content_md", "")
-        existing.hard_constraints = item.get("hard_constraints") or []
-        existing.referenced_entities = referenced_entities
-        existing.review_status = "needs_review" if proposals else "draft"
-        existing.approved_at = None
-        existing.plot_summary_update = item.get("plot_summary_update", "")
-        if item.get("title"):
-            ch.title = _clean_chapter_title(ch.chapter_number, item.get("title"))
-
-    db.commit()
+    final_synopsis_by_chapter = {
+        item.chapter_id: item
+        for item in db.query(Synopsis).filter(Synopsis.chapter_id.in_([chapter.id for chapter in chapters])).all()
+    } if chapters else {}
+    incomplete = [
+        chapter.chapter_number
+        for chapter in chapters
+        if not _synopsis_is_complete(final_synopsis_by_chapter.get(chapter.id))
+    ]
+    if incomplete:
+        missing_text = "、".join(f"第{number}章" for number in incomplete)
+        raise HTTPException(400, f"本卷细纲尚未完整，缺失：{missing_text}。请再次生成补齐后再审批。")
 
     volume.synopsis_generated = True
     volume.review_status = "draft"
@@ -1904,6 +2085,12 @@ async def _execute_chapter_segment_job(db: Session, payload: dict, job_id: str) 
     guard = chapter_access_guard(db, chapter)
     if not guard["ok"]:
         raise HTTPException(400, guard["reason"])
+    volume = db.query(Volume).filter(Volume.id == chapter.volume_id, Volume.novel_id == payload["novel_id"]).first()
+    if not volume or volume.review_status != "approved":
+        raise HTTPException(400, "本章所属分卷细纲尚未审批通过，不能生成正文。")
+    synopsis = db.query(Synopsis).filter(Synopsis.chapter_id == chapter.id).first()
+    if not synopsis or synopsis.review_status != "approved":
+        raise HTTPException(400, "本章细纲尚未审批通过，不能生成正文。")
 
     base_content = chapter.content or ""
     prompt = context_builder.build_chapter_segment_context(
@@ -1982,14 +2169,8 @@ async def _execute_chat_job(db: Session, payload: dict, job_id: str) -> dict:
     messages.append({"role": "user", "content": payload["user_message"]})
 
     ai_job_service.set_running(job_id, "AI 正在检索资料并组织回复...")
-    accumulated = ""
-    last_saved_length = 0
     try:
-        async for chunk in ai_service.stream_generate_with_history(system_prompt, messages):
-            accumulated += chunk
-            if len(accumulated) - last_saved_length >= ai_job_service.PARTIAL_SAVE_INTERVAL:
-                ai_job_service.update_partial(job_id, accumulated, "AI 正在组织回复...")
-                last_saved_length = len(accumulated)
+        accumulated = await ai_service.generate_once_with_history(system_prompt, messages)
         ai_job_service.update_partial(job_id, accumulated, "AI 回复已生成，等待作者确认")
 
         # 检测是否包含大纲生成标记
@@ -2017,8 +2198,6 @@ async def _execute_chat_job(db: Session, payload: dict, job_id: str) -> dict:
             "mode": "answer",
         }
     except Exception:
-        if accumulated:
-            ai_job_service.update_partial(job_id, accumulated, "AI 对话中断，已保留部分结果")
         raise
 
 
@@ -2243,14 +2422,9 @@ async def generate_synopsis(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
-    return _queue_job(
-        background_tasks=background_tasks,
-        db=db,
-        job_type="chapter_synopsis",
-        novel_id=req.novel_id,
-        request_payload=req.model_dump(),
-        chapter_id=req.chapter_id,
-    )
+    void_args = (req, background_tasks, db)
+    del void_args
+    raise HTTPException(410, "单章细纲生成入口已停用。请进入对应分卷，一次性生成并审批本卷全部章节细纲。")
 
 
 @router.post("/synopsis/create-missing-characters")

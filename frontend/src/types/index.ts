@@ -288,6 +288,10 @@ export interface StoryEntity {
   tags?: string[]
   current_state?: Record<string, any>
   status: string
+  graph_role?: 'protagonist' | 'core' | 'supporting' | 'background' | string
+  importance?: number
+  graph_layer?: number
+  graph_position?: Record<string, any>
   first_appearance_chapter?: number | null
   created_at: string
   updated_at: string
@@ -333,6 +337,9 @@ export interface EntityRelation {
   target_entity_id?: string | null
   target_name?: string | null
   relation_type: string
+  relation_strength?: number
+  is_bidirectional?: boolean
+  confidence?: number
   start_chapter?: number | null
   end_chapter?: number | null
   properties?: Record<string, any>
@@ -340,6 +347,40 @@ export interface EntityRelation {
   status: string
   created_at: string
   updated_at: string
+}
+
+export interface EntityGraphNode {
+  id: string
+  name: string
+  entity_type: string
+  graph_role: string
+  importance: number
+  graph_layer: number
+  status: string
+  summary?: string | null
+  current_state?: Record<string, any>
+  graph_position?: Record<string, any>
+}
+
+export interface EntityGraphEdge {
+  id: string
+  source_entity_id: string
+  target_entity_id?: string | null
+  target_name?: string | null
+  relation_type: string
+  relation_strength: number
+  is_bidirectional: boolean
+  confidence: number
+  status: string
+  evidence_text?: string | null
+  properties?: Record<string, any>
+}
+
+export interface EntityGraphData {
+  center_entity_id?: string | null
+  nodes: EntityGraphNode[]
+  edges: EntityGraphEdge[]
+  implicit_edge_count: number
 }
 
 export interface EntityProposal {
@@ -379,6 +420,8 @@ export interface VolumeWorkspace {
 export interface ModelCatalogItem {
   id: string
   name: string
+  api_type?: string
+  tools?: Record<string, any>[]
 }
 
 export interface ModelProviderConfig {
@@ -386,6 +429,7 @@ export interface ModelProviderConfig {
   name: string
   api_base: string
   api_key_source: string
+  api_type?: string
   models: ModelCatalogItem[]
 }
 
@@ -469,5 +513,86 @@ export interface PromptSnippet {
   description?: string | null
   content: string
   created_at: string
+  updated_at: string
+}
+
+// 三层记忆架构类型
+
+// L1: 10章聚合快照
+export interface ChapterSnapshot {
+  id: string
+  novel_id: string
+  start_chapter: number
+  end_chapter: number
+  summary: string
+  key_events: string[]
+  character_arcs: string[]
+  item_changes: string[]
+  open_threads: string[]
+  foreshadowing: string[]
+  created_at: string
+}
+
+// L2: 全局知识索引
+export interface GlobalCharacterStatus {
+  character_id: string
+  name: string
+  current_realm: string
+  current_location: string
+  current_faction: string
+  importance: number
+  status: string
+}
+
+export interface GlobalItemStatus {
+  item_id: string
+  name: string
+  grade: string
+  current_holder: string
+  holder_name: string
+  location: string
+}
+
+export interface GlobalLocationStatus {
+  location_id: string
+  name: string
+  type: string
+  current_state: string
+  significance: string
+}
+
+export interface GlobalEventEntry {
+  chapter_number: number
+  title: string
+  event_type: string
+  entities_involved: string[]
+  description: string
+}
+
+export interface NovelGlobalState {
+  // L0 原始数据摘要
+  total_chapters: number
+  total_words: number
+  approved_chapters: number
+  latest_chapter_number: number
+
+  // L1 聚合快照
+  snapshots: ChapterSnapshot[]
+
+  // L2 全局知识索引
+  characters: GlobalCharacterStatus[]
+  items: GlobalItemStatus[]
+  locations: GlobalLocationStatus[]
+  event_timeline: GlobalEventEntry[]
+  open_threads: string[]
+
+  // 关键伏笔追踪
+  unresolved_foreshadowing: Array<{
+    thread: string
+    introduced_chapter: number
+    related_entities: string[]
+  }>
+
+  // 最后更新时间
   updated_at: string
 }

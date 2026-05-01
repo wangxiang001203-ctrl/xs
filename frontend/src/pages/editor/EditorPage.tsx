@@ -32,7 +32,6 @@ function EditorContent() {
     setWorldbuilding,
     setChapters,
     setVolumes,
-    openTab,
   } = useAppStore()
   const activeTab = openTabs.find(tab => tab.id === activeTabId) || null
 
@@ -80,14 +79,6 @@ function EditorContent() {
       if (activeTab.chapterId) {
         const matched = context.chapters.find(ch => ch.id === activeTab.chapterId) || activeTab.chapterSnapshot || null
         const chapterVolume = matched?.volume_id ? context.volumes.find(vol => vol.id === matched.volume_id) || null : null
-        if (activeTab.type === 'chapter_synopsis') {
-          if (chapterVolume) {
-            openTab({ type: 'volume', novelSnapshot: novel, volumeSnapshot: chapterVolume })
-          } else if (matched) {
-            openTab({ type: 'chapter', novelSnapshot: novel, chapterSnapshot: matched })
-          }
-          return
-        }
         setCurrentVolume(chapterVolume)
         setCurrentChapter(matched)
       } else if (activeTab.volumeId) {
@@ -138,7 +129,6 @@ function EditorContent() {
     case 'relationship_network': return <RelationshipNetworkPage />
     case 'worldbuilding': return <WorldbuildingPage />
     case 'volume': return <VolumePage />
-    case 'chapter_synopsis': return currentNovel ? <VolumePage /> : null
     case 'chapter': return <ChapterPage />
     default: return null
   }

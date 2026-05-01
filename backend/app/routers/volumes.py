@@ -8,10 +8,10 @@ from typing import Optional
 from app.database import get_db
 from app.models.volume import Volume
 from app.models.chapter import Chapter
+from app.models.project import Outline
 from app.models.entity_proposal import EntityProposal
 from app.models.synopsis import Synopsis
 from app.services.file_service import save_chapter_plot_summary, save_chapter_synopsis, save_volume_plan
-from app.services.review_service import serialize_proposal
 
 router = APIRouter(prefix="/api/projects/{novel_id}/volumes", tags=["volumes"])
 DEFAULT_VOLUME_CHAPTER_COUNT = 12
@@ -41,6 +41,18 @@ def _safe_text(value, default: str = "") -> str:
         return default
     text = str(value).strip()
     return text or default
+
+
+def _has_confirmed_outline(db: Session, novel_id: str) -> bool:
+    return db.query(Outline).filter(
+        Outline.novel_id == novel_id,
+        Outline.confirmed == True,  # noqa: E712
+    ).first() is not None
+
+
+def _book_plan_approved_for_novel(db: Session, novel_id: str) -> bool:
+    volumes = db.query(Volume).filter(Volume.novel_id == novel_id).all()
+    return bool(volumes) and all(_book_plan_status(volume) == "approved" for volume in volumes)
 
 
 def _extract_chapter_count_from_markdown(markdown: str | None) -> int:
@@ -149,26 +161,42 @@ def _book_plan_status(volume: Volume) -> str:
     return _safe_text(plan_data.get("book_plan_status"), "draft")
 
 
-def _book_plan_markdown_for_volume(volume: Volume) -> str:
-    plan_data = volume.plan_data or {}
-    saved_markdown = _safe_text(plan_data.get("book_plan_markdown"))
-    if saved_markdown:
-        return saved_markdown
+def _description_looks_labeled(description: str) -> bool:
+    return description.startswith(("本卷主线", "人物成长", "卷末钩子", "核心冲突", "关键设定"))
 
+
+def _build_clean_volume_plan_markdown(volume: Volume) -> str:
+    plan_data = volume.plan_data or {}
     lines = [
         f"## 第{volume.volume_number}卷 {volume.title}",
         f"目标字数：{volume.target_words or 0}",
         f"预计章节数：{volume.planned_chapter_count or 0}",
     ]
-    if volume.description:
-        lines.append(f"本卷定位：{volume.description.strip()}")
+    description = _safe_text(volume.description)
+    if description and not _description_looks_labeled(description):
+        lines.append(f"本卷定位：{description}")
+    core_conflict = _safe_text(plan_data.get("core_conflict"))
+    if core_conflict:
+        lines.append(f"核心冲突：{core_conflict}")
     if volume.main_line:
         lines.append(f"本卷主线：{volume.main_line.strip()}")
     if volume.character_arc:
         lines.append(f"人物成长：{volume.character_arc.strip()}")
+    key_settings = plan_data.get("key_settings")
+    if isinstance(key_settings, list) and key_settings:
+        lines.append(f"关键设定：{'、'.join(str(item) for item in key_settings if str(item).strip())}")
     if volume.ending_hook:
         lines.append(f"卷末钩子：{volume.ending_hook.strip()}")
     return "\n".join(lines).strip()
+
+
+def _book_plan_markdown_for_volume(volume: Volume) -> str:
+    plan_data = volume.plan_data or {}
+    saved_markdown = _safe_text(plan_data.get("book_plan_markdown"))
+    if saved_markdown and "本卷定位：本卷主线" not in saved_markdown:
+        return saved_markdown
+
+    return _build_clean_volume_plan_markdown(volume)
 
 
 def _build_book_volume_plan_markdown(volumes: list[Volume]) -> str:
@@ -377,28 +405,12 @@ def list_volumes(novel_id: str, db: Session = Depends(get_db)):
 
 @router.post("/", response_model=VolumeOut)
 def create_volume(novel_id: str, body: VolumeCreate, db: Session = Depends(get_db)):
-    existing = db.query(Volume).filter(
-        Volume.novel_id == novel_id,
-        Volume.volume_number == body.volume_number,
-    ).first()
-    if existing:
-        raise HTTPException(400, f"第{body.volume_number}卷已存在")
-    v = Volume(novel_id=novel_id, **body.model_dump())
-    db.add(v)
-    db.commit()
-    db.refresh(v)
-    _normalize_volume_defaults(v)
-    if v.plan_markdown or v.plan_data:
-        save_volume_plan(
-            novel_id,
-            v.volume_number,
-            v.plan_markdown or "",
-            v.plan_data or {},
-        )
-    out = VolumeOut.model_validate(v)
-    out.chapter_count = 0
-    out.planned_chapter_count = _effective_planned_chapter_count(v, 0)
-    return out
+    raise HTTPException(400, "分卷必须在「全书分卷」页由 AI 根据已确认大纲生成，不能手动创建。")
+
+
+@router.post("/_legacy-create", response_model=VolumeOut, include_in_schema=False)
+def legacy_create_volume(novel_id: str, body: VolumeCreate, db: Session = Depends(get_db)):
+    raise HTTPException(410, "手动创建分卷已停用，请通过「全书分卷」AI 流程生成卷级规划。")
 
 
 @router.get("/book-plan", response_model=BookVolumePlanOut)
@@ -414,6 +426,8 @@ def get_book_volume_plan(novel_id: str, db: Session = Depends(get_db)):
 
 @router.post("/book-plan/approve", response_model=BookVolumePlanOut)
 def approve_book_volume_plan(novel_id: str, db: Session = Depends(get_db)):
+    if not _has_confirmed_outline(db, novel_id):
+        raise HTTPException(400, "请先确认大纲。全书分卷审批必须建立在已确认大纲上。")
     volumes = db.query(Volume).filter(Volume.novel_id == novel_id).order_by(Volume.volume_number).all()
     if not volumes:
         raise HTTPException(400, "请先让 AI 生成全书分卷，再审批。")
@@ -577,20 +591,15 @@ def get_volume_workspace(novel_id: str, volume_id: str, db: Session = Depends(ge
             }
         )
 
-    proposals = db.query(EntityProposal).filter(
-        EntityProposal.novel_id == novel_id,
-        EntityProposal.volume_id == volume_id,
-        EntityProposal.status == "pending",
-    ).order_by(EntityProposal.created_at.asc()).all()
-
     out = VolumeOut.model_validate(volume)
     out.chapter_count = len(chapter_payload)
     out.planned_chapter_count = _effective_planned_chapter_count(volume, len(chapter_payload))
+    synopsis_markdown = _build_volume_synopsis_markdown(volume, chapters, synopsis_by_chapter) if chapters else (volume.plan_markdown or "")
     return VolumeWorkspaceOut(
         volume=out,
-        volume_synopsis_markdown=volume.plan_markdown or _build_volume_synopsis_markdown(volume, chapters, synopsis_by_chapter),
+        volume_synopsis_markdown=synopsis_markdown,
         chapters=chapter_payload,
-        pending_proposals=[serialize_proposal(item) for item in proposals],
+        pending_proposals=[],
     )
 
 
@@ -599,6 +608,8 @@ def approve_volume(novel_id: str, volume_id: str, db: Session = Depends(get_db))
     volume = db.query(Volume).filter(Volume.id == volume_id, Volume.novel_id == novel_id).first()
     if not volume:
         raise HTTPException(404, "卷不存在")
+    if not _book_plan_approved_for_novel(db, novel_id):
+        raise HTTPException(400, "请先审批全书分卷，再生成或审批本卷章节细纲。")
 
     chapters = db.query(Chapter).filter(Chapter.volume_id == volume_id).order_by(Chapter.chapter_number.asc()).all()
     if not chapters:
@@ -609,14 +620,6 @@ def approve_volume(novel_id: str, volume_id: str, db: Session = Depends(get_db))
         if not synopsis or not synopsis.content_md:
             raise HTTPException(400, f"第{chapter.chapter_number}章尚未生成完整细纲")
         synopses.append(synopsis)
-
-    pending = db.query(EntityProposal).filter(
-        EntityProposal.novel_id == novel_id,
-        EntityProposal.volume_id == volume_id,
-        EntityProposal.status == "pending",
-    ).count()
-    if pending:
-        raise HTTPException(400, "本卷还有待审阅的新实体提案，处理后才能通过卷节奏审批")
 
     approved_at = datetime.utcnow()
     for synopsis in synopses:

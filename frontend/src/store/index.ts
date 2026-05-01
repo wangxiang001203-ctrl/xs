@@ -104,7 +104,7 @@ function buildContextFromTab(tab: WorkspaceTab, state: AppState) {
     currentView: tab.type,
     currentNovel: tab.novelSnapshot ?? state.currentNovel,
     currentVolume: tab.type === 'volume' ? tab.volumeSnapshot ?? state.currentVolume : state.currentVolume,
-    currentChapter: tab.type === 'chapter' || tab.type === 'chapter_synopsis'
+    currentChapter: tab.type === 'chapter'
       ? tab.chapterSnapshot ?? state.currentChapter
       : null,
     activeWorldbuildingSectionId: tab.type === 'worldbuilding'
@@ -236,7 +236,7 @@ export const useAppStore = create<AppState>()(
             currentView: tab.type,
             currentNovel: tab.novelSnapshot ?? state.currentNovel,
             currentVolume: tab.type === 'volume' ? tab.volumeSnapshot ?? state.currentVolume : state.currentVolume,
-            currentChapter: tab.type === 'chapter' || tab.type === 'chapter_synopsis'
+            currentChapter: tab.type === 'chapter'
               ? tab.chapterSnapshot ?? state.currentChapter
               : null,
             activeWorldbuildingSectionId: tab.type === 'worldbuilding'
@@ -319,14 +319,20 @@ export const useAppStore = create<AppState>()(
     {
       name: 'mobi-workspace-store',
       storage: createJSONStorage(() => localStorage),
+      version: 2,
+      migrate: (persistedState: unknown) => {
+        const state = (persistedState || {}) as Partial<AppState>
+        return {
+          ...state,
+          currentChapter: null,
+          currentVolume: null,
+          currentView: 'outline',
+          openTabs: [],
+          activeTabId: null,
+        }
+      },
       partialize: (state) => ({
         currentNovel: state.currentNovel,
-        currentChapter: state.currentChapter,
-        currentVolume: state.currentVolume,
-        currentView: state.currentView,
-        openTabs: state.openTabs,
-        activeTabId: state.activeTabId,
-        activeWorldbuildingSectionId: state.activeWorldbuildingSectionId,
         documentDrafts: state.documentDrafts,
       }),
     },

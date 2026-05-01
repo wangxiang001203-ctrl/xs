@@ -4,9 +4,10 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy import case
 from sqlalchemy.orm import Session
 
-from app.models import Character, Chapter, ChapterMemory, Novel, Outline, Synopsis, Volume, Worldbuilding
+from app.models import Character, Chapter, ChapterMemory, EntityEvent, EntityRelation, Novel, Outline, StoryEntity, Synopsis, Volume, Worldbuilding
 from app.services.workflow_config_service import get_workflow_config
 from app.services.worldbuilding_service import load_worldbuilding_document, summarize_worldbuilding_document
 
@@ -329,6 +330,72 @@ def clarification_for(user_message: str, context_type: str) -> dict | None:
     return {"message": "\n".join(lines), "questions": questions}
 
 
+def build_relation_context(db: Session, novel_id: str, chapter_number: int | None) -> str:
+    """Query real-time relation network data for AI dialog injection."""
+    parts = []
+
+    entities = db.query(StoryEntity).filter(
+        StoryEntity.novel_id == novel_id,
+        StoryEntity.status != "deleted",
+    ).order_by(StoryEntity.graph_layer.asc(), StoryEntity.importance.desc(), StoryEntity.name.asc()).limit(40).all()
+    entity_by_id = {entity.id: entity for entity in entities}
+    if entities:
+        entity_lines = []
+        for entity in entities[:20]:
+            state = entity.current_state or {}
+            state_text = "；".join(f"{key}={value}" for key, value in state.items() if _text(value))[:120]
+            role = entity.graph_role or "supporting"
+            entity_lines.append(
+                f"- {entity.name}｜{entity.entity_type}｜{role}｜重要度{entity.importance or 3}"
+                + (f"｜当前：{state_text}" if state_text else "")
+            )
+        parts.append("【关系网 · 实体当前状态】\n" + "\n".join(entity_lines))
+
+    relations = db.query(EntityRelation).filter(
+        EntityRelation.novel_id == novel_id,
+        EntityRelation.status == "active",
+    ).order_by(EntityRelation.relation_strength.desc(), EntityRelation.updated_at.desc()).limit(40).all()
+    if relations:
+        rel_lines = []
+        for relation in relations:
+            source = entity_by_id.get(relation.source_entity_id)
+            target = entity_by_id.get(relation.target_entity_id) if relation.target_entity_id else None
+            source_name = source.name if source else relation.source_entity_id
+            target_name = target.name if target else (relation.target_name or "未入库目标")
+            arrow = "<->" if relation.is_bidirectional else "->"
+            rel_lines.append(
+                f"- {source_name} {arrow} {target_name}｜{relation.relation_type}｜强度{relation.relation_strength or 1.0}"
+                + (f"｜证据：{_text(relation.evidence_text, 80)}" if relation.evidence_text else "")
+            )
+        parts.append("【关系网 · 关系边】\n" + "\n".join(rel_lines))
+
+    event_query = db.query(EntityEvent).filter(
+        EntityEvent.novel_id == novel_id,
+        EntityEvent.status.in_(["active", "confirmed"]),
+    )
+    if chapter_number is not None:
+        event_query = event_query.filter(
+            (EntityEvent.chapter_number == None) | (EntityEvent.chapter_number <= chapter_number)  # noqa: E711
+        )
+    events = event_query.order_by(
+        case((EntityEvent.chapter_number == None, 1), else_=0),  # noqa: E711
+        EntityEvent.chapter_number.desc(),
+        EntityEvent.updated_at.desc(),
+    ).limit(24).all()
+    if events:
+        event_lines = []
+        for event in events:
+            entity = entity_by_id.get(event.entity_id)
+            chapter_label = f"第{event.chapter_number}章" if event.chapter_number else "全局"
+            event_lines.append(
+                f"- {chapter_label}｜{entity.name if entity else event.entity_id}｜{event.event_type}"
+                + (f"｜{_text(event.title or event.evidence_text, 120)}" if (event.title or event.evidence_text) else "")
+            )
+        parts.append("【关系网 · 状态事件】\n" + "\n".join(event_lines))
+
+    return "\n\n".join(parts)
+
+
 def build_smart_chat_context(
     db: Session,
     *,
@@ -353,6 +420,15 @@ def build_smart_chat_context(
         snippet = excerpt(file.content, matched_term) if matched_term else _text(file.content, 900)
         context_blocks.append(f"### {file.label}\n路径：{file.path}\n类型：{file.kind}\n片段：\n{snippet}")
 
+    # Extract chapter number for relation context injection
+    chapter_num: int | None = None
+    if context_type in ("chapter", "chapter_synopsis") and context_id:
+        chapter_obj = db.query(Chapter).filter(Chapter.id == context_id).first()
+        if chapter_obj:
+            chapter_num = chapter_obj.chapter_number
+
+    relation_context = build_relation_context(db, novel_id, chapter_num)
+
     capability_prompt = f"""
 
 【小说 AI 助手工作协议】
@@ -366,6 +442,8 @@ def build_smart_chat_context(
 
 【本次自动检索到的参考资料】
 {chr(10).join(context_blocks) if context_blocks else "暂无可用资料。"}
+
+{relation_context if relation_context else ""}
 """
     return {
         "system_prompt": base_context + capability_prompt,

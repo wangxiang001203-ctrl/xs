@@ -11,7 +11,9 @@ import type {
   EntityEvent,
   EntityMention,
   EntityRelation,
+  EntityGraphData,
   Novel,
+  NovelGlobalState,
   Outline,
   OutlineChatResult,
   OutlineChatMessage,
@@ -83,6 +85,7 @@ export const api = {
     get: (id: string) => http.get<Novel>(`/api/projects/${id}`).then(r => r.data),
     update: (id: string, data: Partial<Novel>) => http.patch<Novel>(`/api/projects/${id}`, data).then(r => r.data),
     delete: (id: string) => http.delete(`/api/projects/${id}`).then(r => r.data),
+    globalState: (id: string) => http.get<NovelGlobalState>(`/api/projects/${id}/global-state`).then(r => r.data),
   },
 
   outline: {
@@ -107,12 +110,18 @@ export const api = {
     update: (novelId: string, charId: string, data: Partial<Character>) =>
       http.patch<Character>(`/api/projects/${novelId}/characters/${charId}`, data).then(r => r.data),
     delete: (novelId: string, charId: string) =>
-      http.delete(`/api/projects/${novelId}/characters/${charId}`).then(r => r.data),
+      http.delete<{ ok: boolean; archived?: boolean; character?: Character }>(`/api/projects/${novelId}/characters/${charId}`).then(r => r.data),
   },
 
   entities: {
     bootstrap: (novelId: string) =>
-      http.post<{ created: number }>(`/api/projects/${novelId}/entities/bootstrap`).then(r => r.data),
+      http.post<{ created: number; created_relations: number }>(`/api/projects/${novelId}/entities/bootstrap`).then(r => r.data),
+    bootstrapGraph: (novelId: string) =>
+      http.post<{ center_entity_id?: string | null; entity_count: number; created_entities: number; created_relations: number }>(
+        `/api/projects/${novelId}/entities/graph/bootstrap`,
+      ).then(r => r.data),
+    graphData: (novelId: string) =>
+      http.get<EntityGraphData>(`/api/projects/${novelId}/entities/graph-data`).then(r => r.data),
     list: (novelId: string, params?: { entityType?: string; status?: string; q?: string }) =>
       http.get<StoryEntity[]>(`/api/projects/${novelId}/entities`, {
         params: {
@@ -148,6 +157,10 @@ export const api = {
       }).then(r => r.data),
     createRelation: (novelId: string, data: Partial<EntityRelation>) =>
       http.post<EntityRelation>(`/api/projects/${novelId}/entities/relations`, data).then(r => r.data),
+    updateRelation: (novelId: string, relationId: string, data: Partial<EntityRelation>) =>
+      http.patch<EntityRelation>(`/api/projects/${novelId}/entities/relations/${relationId}`, data).then(r => r.data),
+    deleteRelation: (novelId: string, relationId: string) =>
+      http.delete(`/api/projects/${novelId}/entities/relations/${relationId}`).then(r => r.data),
   },
 
   worldbuilding: {
@@ -195,14 +208,6 @@ export const api = {
         { novel_id: novelId, outline_id: options?.outlineId, dry_run: options?.dryRun },
         (payload) => payload?.characters || [],
       ),
-    generateSynopsis: (payload: { novel_id: string; chapter_id: string; chapter_number: number; extra_instruction?: string }) =>
-      runAiJob<{ status: string; summary_line?: string; missing_entities?: Record<string, string[]>; pending_proposals?: EntityProposal[] }>('/api/ai/generate/synopsis', payload),
-    generateChapter: (novelId: string, chapterId: string, extraInstruction?: string) =>
-      runAiJob<Chapter>('/api/ai/generate/chapter', {
-        novel_id: novelId,
-        chapter_id: chapterId,
-        extra_instruction: extraInstruction,
-      }),
     generateChapterDraft: (novelId: string, chapterId: string, extraInstruction?: string) =>
       runAiJob<ChapterDraftResult>('/api/ai/generate/chapter', {
         novel_id: novelId,
@@ -210,16 +215,6 @@ export const api = {
         extra_instruction: extraInstruction,
         dry_run: true,
       }),
-    validateCharacters: (novelId: string, names: string[]) =>
-      http.post<{ valid: boolean; missing: string[] }>('/api/ai/validate/synopsis-characters', {
-        novel_id: novelId,
-        characters_in_synopsis: names,
-      }).then(r => r.data),
-    createMissingCharacters: (novelId: string, missingNames: string[]) =>
-      http.post<{ created: string[] }>('/api/ai/synopsis/create-missing-characters', {
-        novel_id: novelId,
-        missing_names: missingNames,
-      }).then(r => r.data),
     generateTitles: (novelId: string, extraInstruction?: string) =>
       runAiJob<{ titles: string[] }>('/api/ai/generate/titles', {
         novel_id: novelId,
@@ -265,15 +260,6 @@ export const api = {
       http.get<AIGenerationJob<T>>(`/api/ai/jobs/${jobId}`).then(r => r.data),
     listJobs: <T = any>(novelId: string, limit = 20) =>
       http.get<AIGenerationJob<T>[]>('/api/ai/jobs', { params: { novel_id: novelId, limit } }).then(r => r.data),
-    chat: (payload: {
-      novel_id: string
-      context_type: string
-      context_id?: string | null
-      messages: Array<{ role: string; content: string }>
-      user_message: string
-      context_files?: string[]
-    }) =>
-      runAiJob<AssistantChatResult>('/api/ai/chat', payload),
   },
 
   assistant: {

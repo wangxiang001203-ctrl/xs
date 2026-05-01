@@ -19,8 +19,10 @@ class ModelRuntime:
     api_base: str
     api_key: str
     api_key_name: str
+    api_type: str
     model_id: str
     model_name: str
+    tools: list[dict[str, Any]] | None = None
 
 
 @dataclass
@@ -42,6 +44,8 @@ def resolve_runtime(model: str | None = None) -> ModelRuntime:
     model_info = active["model"] or {}
     api_base = provider.get("api_base") or "https://ark.cn-beijing.volces.com/api/v3"
     model_id = model or model_info.get("id") or "ep-20260423202015-mbc68"
+    api_type = model_info.get("api_type") or provider.get("api_type") or "openai_compatible"
+    tools = model_info.get("tools") if isinstance(model_info.get("tools"), list) else None
     api_key_source = provider.get("api_key_source") or "ark_api_key"
     api_key = getattr(settings, api_key_source, "") or settings.ark_api_key
     if not api_key:
@@ -56,8 +60,10 @@ def resolve_runtime(model: str | None = None) -> ModelRuntime:
         api_base=api_base.rstrip("/"),
         api_key=api_key,
         api_key_name=api_key_source,
+        api_type=api_type,
         model_id=model_id,
         model_name=model_info.get("name") or model_id,
+        tools=tools,
     )
 
 
@@ -68,6 +74,7 @@ def runtime_descriptor(model: str | None = None) -> dict[str, str]:
         "provider_name": runtime.provider_name,
         "model_id": runtime.model_id,
         "model_name": runtime.model_name,
+        "api_type": runtime.api_type,
     }
 
 
@@ -76,6 +83,157 @@ def _headers(runtime: ModelRuntime) -> dict[str, str]:
         "Content-Type": "application/json",
         "Authorization": f"Bearer {runtime.api_key}",
     }
+
+
+def _message_text(message: dict[str, Any]) -> str:
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if text:
+                    parts.append(str(text))
+        return "\n".join(parts)
+    return str(content or "")
+
+
+def _responses_input(messages: list[dict[str, str]], *, inline_system: bool = False) -> tuple[list[dict[str, Any]], str]:
+    instructions: list[str] = []
+    input_items: list[dict[str, Any]] = []
+    for message in messages:
+        role = message.get("role") or "user"
+        text = _message_text(message).strip()
+        if not text:
+            continue
+        if role == "system":
+            instructions.append(text)
+            continue
+        input_items.append({
+            "role": "assistant" if role == "assistant" else "user",
+            "content": [{"type": "input_text", "text": text}],
+        })
+
+    instruction_text = "\n\n".join(instructions).strip()
+    if inline_system and instruction_text:
+        if input_items:
+            first_content = input_items[0].setdefault("content", [])
+            if first_content and isinstance(first_content[0], dict):
+                first_content[0]["text"] = f"{instruction_text}\n\n{first_content[0].get('text') or ''}".strip()
+        else:
+            input_items.append({
+                "role": "user",
+                "content": [{"type": "input_text", "text": instruction_text}],
+            })
+        instruction_text = ""
+
+    if not input_items:
+        input_items.append({
+            "role": "user",
+            "content": [{"type": "input_text", "text": instruction_text or "请继续。"}],
+        })
+        instruction_text = "" if instruction_text else instruction_text
+    return input_items, instruction_text
+
+
+def _responses_payload(
+    runtime: ModelRuntime,
+    messages: list[dict[str, str]],
+    *,
+    temperature: float,
+    max_tokens: int,
+    inline_system: bool = False,
+) -> dict[str, Any]:
+    input_items, instructions = _responses_input(messages, inline_system=inline_system)
+    payload: dict[str, Any] = {
+        "model": runtime.model_id,
+        "stream": False,
+        "input": input_items,
+        "max_output_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    if instructions:
+        payload["instructions"] = instructions
+    if runtime.tools:
+        payload["tools"] = runtime.tools
+    return payload
+
+
+def _extract_responses_text(data: dict[str, Any]) -> str:
+    if isinstance(data.get("output_text"), str):
+        return data["output_text"]
+    if isinstance(data.get("choices"), list) and data["choices"]:
+        message = data["choices"][0].get("message") or {}
+        if isinstance(message.get("content"), str):
+            return message["content"]
+
+    parts: list[str] = []
+    for output in data.get("output") or []:
+        if not isinstance(output, dict):
+            continue
+        content = output.get("content")
+        if isinstance(content, str):
+            parts.append(content)
+            continue
+        if not isinstance(content, list):
+            continue
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+    return "\n".join(part for part in parts if part).strip()
+
+
+async def responses_completion(
+    messages: list[dict[str, str]],
+    *,
+    model: str | None = None,
+    temperature: float = 0.7,
+    max_tokens: int = 4096,
+) -> GatewayResponse:
+    runtime = resolve_runtime(model)
+    payload = _responses_payload(
+        runtime,
+        messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+
+    async with httpx.AsyncClient(timeout=_timeout()) as client:
+        url = f"{runtime.api_base}/responses"
+        resp = await client.post(url, headers=_headers(runtime), json=payload)
+        
+        if resp.status_code in {400, 422} and payload.get("instructions"):
+            payload = _responses_payload(
+                runtime,
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                inline_system=True,
+            )
+            resp = await client.post(url, headers=_headers(runtime), json=payload)
+            
+        if resp.status_code in {400, 422} and ("temperature" in payload or "max_output_tokens" in payload):
+            payload.pop("temperature", None)
+            payload.pop("max_output_tokens", None)
+            resp = await client.post(url, headers=_headers(runtime), json=payload)
+            
+        resp.raise_for_status()
+        data = resp.json()
+
+    return GatewayResponse(
+        content=_extract_responses_text(data),
+        provider_id=runtime.provider_id,
+        model_id=runtime.model_id,
+        raw=data,
+    )
 
 
 async def chat_completion(
@@ -87,6 +245,14 @@ async def chat_completion(
     response_format: dict[str, Any] | None = None,
 ) -> GatewayResponse:
     runtime = resolve_runtime(model)
+    if runtime.api_type in {"ark_responses", "responses"}:
+        return await responses_completion(
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
     payload: dict[str, Any] = {
         "model": runtime.model_id,
         "messages": messages,
@@ -143,30 +309,12 @@ async def stream_chat_completion(
     temperature: float = 0.7,
     max_tokens: int = 4096,
 ) -> AsyncGenerator[str, None]:
-    runtime = resolve_runtime(model)
-    payload = {
-        "model": runtime.model_id,
-        "messages": messages,
-        "stream": True,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
-    async with httpx.AsyncClient(timeout=_timeout()) as client:
-        async with client.stream("POST", f"{runtime.api_base}/chat/completions", headers=_headers(runtime), json=payload) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if not line.startswith("data:"):
-                    continue
-                raw = line[5:].strip()
-                if raw == "[DONE]":
-                    break
-                try:
-                    import json
-
-                    chunk = json.loads(raw)
-                    delta = chunk["choices"][0]["delta"]
-                    text = delta.get("content") or ""
-                    if text:
-                        yield text
-                except Exception:
-                    continue
+    # Compatibility shim only. The product uses job polling and non-streaming
+    # model calls so every AI path has a single complete response to audit.
+    result = await chat_completion(
+        messages,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    yield result.content

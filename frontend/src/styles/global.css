@@ -58,6 +58,11 @@ html, body, #root {
   overflow: hidden;
 }
 
+html.portal-home-active,
+body.portal-home-active {
+  background: #061015 !important;
+}
+
 /* Ant Design 主题覆盖 */
 .ant-btn-primary {
   background: var(--primary) !important;
